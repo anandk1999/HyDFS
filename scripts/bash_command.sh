@@ -18,10 +18,31 @@ fi
 
 CMD="$*"
 
+# Ask user where to execute the command
+echo "Where do you want to execute the command?"
+echo "1) Repository directory (mp3-g02)"
+echo "2) Root/home directory"
+read -p "Enter choice (1 or 2): " choice
+
+case $choice in
+  1)
+    EXEC_DIR="cd mp3-g02 && "
+    echo "Executing in repository directory..."
+    ;;
+  2)
+    EXEC_DIR=""
+    echo "Executing in root/home directory..."
+    ;;
+  *)
+    echo "Invalid choice. Defaulting to repository directory."
+    EXEC_DIR="cd mp3-g02 && "
+    ;;
+esac
+
 for HOST in $(cat "$HOSTS_FILE"); do
   (
     echo ">>> Executing on $HOST: $CMD"
-    ssh "$REMOTE_USER@$HOST" "cd mp3-g02 && $CMD"
+    ssh "$REMOTE_USER@$HOST" "${EXEC_DIR}$CMD"
   ) &
 done
 
