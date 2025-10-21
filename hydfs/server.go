@@ -59,6 +59,16 @@ func (s *Server) backgroundTasks() {
 			return
 		case <-ticker.C:
 			s.ring.UpdateRing()
+
+			// Detect membership changes (joins)
+			currentCount := len(s.membership.GetAllMembers())
+			if currentCount > s.lastMemberCount {
+				log.Printf("[HyDFS] Membership increased from %d to %d nodes, triggering rebalancing",
+					s.lastMemberCount, currentCount)
+				go s.TriggerReReplication("node join detected")
+			}
+			s.lastMemberCount = currentCount
+
 			// Check for files that need re-replication
 			s.checkForReReplication()
 		}

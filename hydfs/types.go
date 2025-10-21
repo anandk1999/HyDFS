@@ -40,9 +40,10 @@ type Server struct {
 	stopChan   chan struct{} // For background tasks
 
 	// New fields for distributed communication
-	Client      *http.Client // HTTP client for node-to-node communication
-	ControlPort int          // The port number for the control server
-	replState   int32        // tracks if a re-replication pass is in-flight
+	Client          *http.Client // HTTP client for node-to-node communication
+	ControlPort     int          // The port number for the control server
+	replState       int32        // tracks if a re-replication pass is in-flight
+	lastMemberCount int          // tracks membership size to detect joins
 }
 
 // Internal (node-to-node) request payloads

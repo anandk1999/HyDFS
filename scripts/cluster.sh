@@ -22,6 +22,8 @@
 #                      e.g., ./cluster.sh cmd 3 create local.txt dfs_file.txt
 #   logs <pattern>     Remotely greps logs on all VMs for the given pattern.
 #                      e.g., ./cluster.sh logs "SUSPECT|FAILED"
+#   rejoin <vm>        Rejoins a specific VM to the cluster (kills old process, clears storage).
+#                      e.g., ./cluster.sh rejoin 3
 #
 # ==============================================================================
 
@@ -184,8 +186,44 @@ case "$COMMAND" in
         PATTERN=$1
         run_on_all "cd ${PROJECT_DIR_NAME} && grep -H \"${PATTERN}\" node.log"
         ;;
+    rejoin)
+        if [ -z "$1" ]; then
+            echo -e "${RED}Error: 'rejoin' requires a VM index (1-10).${NC}"
+            exit 1
+        fi
+        VM_INDEX=$1
+
+        if [ "${VM_INDEX}" -lt 1 ] || [ "${VM_INDEX}" -gt "${NUM_VMS}" ]; then
+            echo -e "${RED}Error: Invalid VM index. Must be between 1 and ${NUM_VMS}.${NC}"
+            exit 1
+        fi
+
+        # Get introducer address
+        INTRODUCER_HOST=${HOSTS[1]}
+        INTRODUCER_IP=$(ssh "${REMOTE_USER}@${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
+        INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
+
+        TARGET_HOST=${HOSTS[${VM_INDEX}]}
+        port=$((8080 + VM_INDEX - 1))
+        cport=$((18080))
+
+        echo -e "${YELLOW}Rejoining node ${VM_INDEX} (${TARGET_HOST}) to cluster...${NC}"
+        echo "Introducer: ${INTRODUCER_ADDR}"
+        echo "Node will use ports ${port}/${cport}"
+
+        ssh "${REMOTE_USER}@${TARGET_HOST}" "
+            cd ${PROJECT_DIR_NAME} &&
+            pkill -f './${BINARY_NAME}' || true &&
+            sleep 1 &&
+            rm -rf hydfs_storage &&
+            go build -o ${BINARY_NAME} . &&
+            nohup ./${BINARY_NAME} -port ${port} -control-port ${cport} -introducer ${INTRODUCER_ADDR} > node.log 2>&1 &
+        "
+        
+        echo -e "${GREEN}Node ${VM_INDEX} rejoined. Check logs with: ./cluster.sh logs 'Joined the group'${NC}"
+        ;;
     *)
-        echo "Usage: $0 {setup|pull|build|start|stop|clean|cmd|logs} [args...]"
+        echo "Usage: $0 {setup|pull|build|start|stop|clean|cmd|logs|rejoin} [args...]"
         exit 1
         ;;
 esac
