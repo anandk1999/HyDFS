@@ -203,7 +203,7 @@ case "$COMMAND" in
         INTRODUCER_IP=$(ssh "${REMOTE_USER}@${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
         INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
 
-        TARGET_HOST=${HOSTS[${VM_INDEX}]}
+        TARGET_HOST=$(sed -n "${VM_INDEX}p" ../hosts.txt)
         port=$((8080 + VM_INDEX - 1))
         cport=$((18080))
 
