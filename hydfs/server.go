@@ -141,7 +141,7 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[HyDFS] Create for %s completed (W=%d)", hydfsFilename, ackCount)
-	fmt.Fprintf(w, "File %s created successfully on replicas (W=%d):\n", hydfsFilename, ackCount)
+	fmt.Fprintf(w, "File %s created successfully on replicas (W=%d & FileID=%d):\n", hydfsFilename, ackCount, fileID)
 	for _, rep := range replicas {
 		fmt.Fprintf(w, "  - %s\n", rep.Address())
 	}
