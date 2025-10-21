@@ -1,9 +1,10 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Runs an arbitrary shell command on all hosts listed in hosts.txt.
 # Example: ./bash_command.sh 'uname -a'
 # Load remote username
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH=${0:A}
+SCRIPT_DIR="$(cd "${SCRIPT_PATH:h}" && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 REMOTE_USER="${REMOTE_USER:-saik2}"
 
@@ -22,7 +23,8 @@ CMD="$*"
 echo "Where do you want to execute the command?"
 echo "1) Repository directory (mp3-g02)"
 echo "2) Root/home directory"
-read -p "Enter choice (1 or 2): " choice
+printf "Enter choice (1 or 2): "
+read choice
 
 case $choice in
   1)

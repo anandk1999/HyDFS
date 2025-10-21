@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Runs git pull inside the repo on each host.
 # Load remote username

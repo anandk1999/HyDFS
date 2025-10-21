@@ -390,13 +390,20 @@ func (s *Server) HandleListStore(w http.ResponseWriter, r *http.Request) {
 
 	selfHash := s.ring.Hash(s.selfNodeID.String())
 	fmt.Fprintf(w, "Node: %s (RingID: %d)\n", s.selfNodeID.Address(), selfHash)
-	fmt.Fprintln(w, "Stored files (FileIDs):")
+	fmt.Fprintln(w, "Stored files:")
 	if len(fileIDs) == 0 {
 		fmt.Fprintln(w, "  (None)")
 		return
 	}
 	for _, fileID := range fileIDs {
-		fmt.Fprintf(w, "  - %s\n", fileID)
+		meta, metaErr := s.store.ReadMetadata(fileID)
+		filename := "(unknown)"
+		if metaErr != nil {
+			log.Printf("[HyDFS] liststore: failed to read metadata for %s: %v", fileID, metaErr)
+		} else if meta != nil && meta.Filename != "" {
+			filename = meta.Filename
+		}
+		fmt.Fprintf(w, "  - %s (FileID: %s)\n", filename, fileID)
 	}
 }
 
@@ -540,6 +547,24 @@ func (s *Server) HandleInternalWriteMeta(w http.ResponseWriter, r *http.Request)
 	}
 
 	log.Printf("[HyDFS-Replica] Successfully overwrote golden metadata for %s", fileID)
+	w.WriteHeader(http.StatusOK)
+}
+
+// HandleInternalDelete removes a file from this replica (used for rebalancing)
+func (s *Server) HandleInternalDelete(w http.ResponseWriter, r *http.Request) {
+	fileID := r.URL.Query().Get("fileid")
+	if fileID == "" {
+		http.Error(w, "Missing 'fileid' query param", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.DeleteFile(fileID); err != nil {
+		log.Printf("[HyDFS-Replica] FAILED to delete file %s: %v", fileID, err)
+		http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[HyDFS-Replica] Successfully deleted file %s", fileID)
 	w.WriteHeader(http.StatusOK)
 }
 

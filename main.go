@@ -388,6 +388,12 @@ func main() {
 		log.Fatalf("Failed to create HyDFS server: %v", err)
 	}
 	hyServer.Start() // Start background tasks
+
+	// Register failure callback to trigger re-replication on node failures
+	controller.RegisterFailureCallback(func(failedNode utils.NodeID) {
+		log.Printf("[Main] Node %s failed, triggering re-replication/rebalancing", failedNode)
+		hyServer.TriggerReReplication(fmt.Sprintf("node failure: %s", failedNode))
+	})
 	// --- End MP3 Setup ---
 
 	// Start control server (daemon API)
@@ -456,6 +462,7 @@ func NewControlServer(c *Controller, hyServer *hydfs.Server, controlPort int) *C
 	mux.HandleFunc("/internal/get-block", cs.hydfs.HandleInternalGetBlock)
 	mux.HandleFunc("/internal/list-files", cs.hydfs.HandleInternalListFiles)
 	mux.HandleFunc("/internal/write-meta", cs.hydfs.HandleInternalWriteMeta)
+	mux.HandleFunc("/internal/delete", cs.hydfs.HandleInternalDelete)
 
 	cs.srv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", controlPort),

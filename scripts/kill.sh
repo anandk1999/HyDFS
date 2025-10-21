@@ -1,8 +1,9 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Kills anything listening on port 8080 across all hosts (plus common dev tools).
 # Load remote username
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH=${0:A}
+SCRIPT_DIR="$(cd "${SCRIPT_PATH:h}" && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 REMOTE_USER="${REMOTE_USER:-saik2}"
 HOSTS_FILE="../hosts.txt"
@@ -13,25 +14,34 @@ HOSTS=($(cat "$HOSTS_FILE"))
 
 echo "Select normal nodes (space-separated numbers, or ENTER for all):"
 OTHER_HOSTS=()
-for i in "${!HOSTS[@]}"; do
-    OTHER_HOSTS+=("${HOSTS[$i]}")
-    echo "  ${#OTHER_HOSTS[@]}. ${HOSTS[$i]}"
+for ((i = 1; i <= ${#HOSTS[@]}; i++)); do
+    host=${HOSTS[$i]}
+    OTHER_HOSTS+=("$host")
+    echo "  ${#OTHER_HOSTS[@]}. $host"
 done
 
-read -p "Enter numbers: " selected
+selected="$*"
+if [[ -z "$selected" ]]; then
+    printf "Enter numbers: "
+    read selected
+fi
 if [ -z "$selected" ]; then
     NORMAL_NODES=("${OTHER_HOSTS[@]}")
 else
     NORMAL_NODES=()
     for num in $selected; do
-        NORMAL_NODES+=("${OTHER_HOSTS[$((num - 1))]}")
+        if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#OTHER_HOSTS[@]} )); then
+            NORMAL_NODES+=("${OTHER_HOSTS[$num]}")
+        else
+            echo "Skipping invalid selection: $num"
+        fi
     done
 fi
 
 # Start normal nodes in parallel
 echo "Starting ${#NORMAL_NODES[@]} normal nodes..."
 for host in "${NORMAL_NODES[@]}"; do
-    echo ">>> Killing process on port 8080 at $HOST"
+    echo ">>> Killing process on port 8080 at $host"
     ssh "$REMOTE_USER@$host" "pkill -f mp2-node" &
 done
 

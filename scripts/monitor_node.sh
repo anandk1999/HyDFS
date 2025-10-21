@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 # Live monitoring script - shows SUSPECT events and allows CLI commands
 # Usage: ./scripts/monitor_node.sh [host] [port]
 

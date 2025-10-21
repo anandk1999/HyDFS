@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Copies your SSH keys to each VM (~/.ssh). Assumes keys exist locally.
 # Load remote username

@@ -43,6 +43,9 @@ func (s *Server) performReReplication(reason string) {
 		return
 	}
 
+	// Only check rebalancing on explicit topology changes, not on routine background scans
+	shouldRebalance := reason != "background"
+
 	for _, fileID := range fileIDs {
 		meta, err := s.store.ReadMetadata(fileID)
 		if err != nil {
@@ -54,6 +57,9 @@ func (s *Server) performReReplication(reason string) {
 		if len(currentReplicas) < 3 {
 			log.Printf("[ReReplication] File %s replicas below quorum (%d/3), reason=%s", fileID, len(currentReplicas), reason)
 			s.reReplicateFile(fileID, meta, currentReplicas)
+		} else if shouldRebalance {
+			// Only rebalance when explicitly triggered by topology change (join/failure/recovery)
+			s.checkAndRebalance(fileID, meta, currentReplicas)
 		}
 	}
 }
@@ -235,4 +241,155 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 	}
 
 	log.Printf("[ReReplication] Completed re-replication of file %s to %d new nodes", fileID, len(targetNodes))
+}
+
+// checkAndRebalance verifies that replicas are stored on the correct ring successors
+// and redistributes if necessary (e.g., after node joins)
+func (s *Server) checkAndRebalance(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
+	filename := s.resolveFilename(meta)
+	desiredReplicas := s.ring.GetSuccessors(filename, 3)
+
+	if len(desiredReplicas) == 0 {
+		return
+	}
+
+	// Build maps for comparison
+	currentMap := make(map[string]bool)
+	for _, node := range currentReplicas {
+		currentMap[node.String()] = true
+	}
+
+	desiredMap := make(map[string]bool)
+	for _, node := range desiredReplicas {
+		desiredMap[node.String()] = true
+	}
+
+	// Find nodes that should have the file but don't (need to copy TO)
+	missingNodes := make([]utils.NodeID, 0)
+	for _, desired := range desiredReplicas {
+		if !currentMap[desired.String()] {
+			missingNodes = append(missingNodes, desired)
+		}
+	}
+
+	// Find nodes that have the file but shouldn't (need to DELETE from)
+	excessNodes := make([]utils.NodeID, 0)
+	for _, current := range currentReplicas {
+		if !desiredMap[current.String()] {
+			excessNodes = append(excessNodes, current)
+		}
+	}
+
+	if len(missingNodes) == 0 && len(excessNodes) == 0 {
+		// Already balanced
+		return
+	}
+
+	// Only coordinate rebalance from the lexicographically lowest current replica
+	if !s.shouldCoordinateReReplication(currentReplicas) {
+		return
+	}
+
+	log.Printf("[Rebalance] File %s (%s) needs rebalancing: +%d nodes, -%d nodes",
+		fileID, filename, len(missingNodes), len(excessNodes))
+
+	// Step 1: Copy to missing nodes
+	if len(missingNodes) > 0 && len(currentReplicas) > 0 {
+		sourceNode := currentReplicas[0]
+		s.copyFileToNodes(fileID, meta, sourceNode, missingNodes)
+	}
+
+	// Step 2: Delete from excess nodes
+	if len(excessNodes) > 0 {
+		s.deleteFileFromNodes(fileID, excessNodes)
+	}
+
+	log.Printf("[Rebalance] Completed rebalancing for file %s", fileID)
+}
+
+// copyFileToNodes replicates all blocks of a file from source to target nodes
+func (s *Server) copyFileToNodes(fileID string, meta *Metadata, sourceNode utils.NodeID, targetNodes []utils.NodeID) {
+	metaBytes, _ := json.Marshal(meta)
+
+	for _, block := range meta.Blocks {
+		// Fetch block from source
+		url := s.buildReplicaURL(sourceNode, fmt.Sprintf("/internal/get-block?fileid=%s&blockid=%s", fileID, block.BlockID))
+		resp, err := s.Client.Get(url)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			log.Printf("[Rebalance] Failed to fetch block %s from %s: %v", block.BlockID, sourceNode.Address(), err)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+
+		blockData, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("[Rebalance] Failed to read block %s: %v", block.BlockID, err)
+			continue
+		}
+
+		blockInfoBytes, _ := json.Marshal(block)
+
+		// Send to all target nodes
+		var wg sync.WaitGroup
+		for _, targetNode := range targetNodes {
+			wg.Add(1)
+			go func(node utils.NodeID, data []byte) {
+				defer wg.Done()
+
+				body := &bytes.Buffer{}
+				writer := multipart.NewWriter(body)
+				writer.WriteField("fileid", fileID)
+				writer.WriteField("metadata", string(metaBytes))
+				writer.WriteField("blockinfo", string(blockInfoBytes))
+
+				part, _ := writer.CreateFormFile("blockdata", block.BlockID)
+				part.Write(data)
+				writer.Close()
+
+				url := s.buildReplicaURL(node, "/internal/write")
+				req, _ := http.NewRequest(http.MethodPost, url, body)
+				req.Header.Set("Content-Type", writer.FormDataContentType())
+
+				resp, err := s.Client.Do(req)
+				if err == nil && resp.StatusCode == http.StatusOK {
+					log.Printf("[Rebalance] Copied block %s of file %s to %s", block.BlockID, fileID, node.Address())
+					resp.Body.Close()
+				} else {
+					log.Printf("[Rebalance] Failed to copy block %s to %s: %v", block.BlockID, node.Address(), err)
+					if resp != nil {
+						resp.Body.Close()
+					}
+				}
+			}(targetNode, blockData)
+		}
+		wg.Wait()
+	}
+}
+
+// deleteFileFromNodes removes a file from nodes that should no longer store it
+func (s *Server) deleteFileFromNodes(fileID string, nodes []utils.NodeID) {
+	var wg sync.WaitGroup
+	for _, node := range nodes {
+		wg.Add(1)
+		go func(n utils.NodeID) {
+			defer wg.Done()
+
+			url := s.buildReplicaURL(n, fmt.Sprintf("/internal/delete?fileid=%s", fileID))
+			req, _ := http.NewRequest(http.MethodDelete, url, nil)
+			resp, err := s.Client.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				log.Printf("[Rebalance] Deleted file %s from %s", fileID, n.Address())
+				resp.Body.Close()
+			} else {
+				log.Printf("[Rebalance] Failed to delete file %s from %s: %v", fileID, n.Address(), err)
+				if resp != nil {
+					resp.Body.Close()
+				}
+			}
+		}(node)
+	}
+	wg.Wait()
 }

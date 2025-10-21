@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Kills anything listening on port 8080 across all hosts (plus common dev tools).
 # Load remote username

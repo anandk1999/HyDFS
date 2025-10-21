@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Deletes a handful of common files and directories on every VM (careful!).
 # Load remote username

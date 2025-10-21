@@ -1,12 +1,14 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Load remote username
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH=${0:A}
+SCRIPT_DIR="$(cd "${SCRIPT_PATH:h}" && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 REMOTE_USER="${REMOTE_USER:-saik2}"
 
 # Ask for file to transfer
-read -p "Enter file name: " file
+printf "Enter file name: "
+read file
 
 # Check if file exists locally (only for common mode)
 if [[ ! -f "$file" ]]; then
@@ -14,10 +16,13 @@ if [[ ! -f "$file" ]]; then
 fi
 
 # Confirm file with user
-read -p "Continue? (Y/N): " confirm && [[ $confirm =~ ^[Yy](es)?$ ]] || exit 1
+printf "Continue? (Y/N): "
+read confirm
+[[ $confirm =~ ^[Yy](es)?$ ]] || exit 1
 
 # Ask if this is common or VM-specific
-read -p "Is this a common file for all VMs? (Y/N): " common
+printf "Is this a common file for all VMs? (Y/N): "
+read common
 
 HOSTS_FILE="../hosts.txt"
 
