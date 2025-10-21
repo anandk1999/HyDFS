@@ -31,15 +31,18 @@ import (
 
 // Controller is simplified to only manage PingAck
 type Controller struct {
-	pingAckManager *detectors.PingAckManager
-	membership     *utils.MembershipList
-	network        *utils.NetworkLayer
-	suspicionMgr   *utils.SuspicionManager
+	pingAckManager     *detectors.PingAckManager
+	membership         *utils.MembershipList
+	network            *utils.NetworkLayer
+	suspicionMgr       *utils.SuspicionManager
+	failureCallbacks   []func(utils.NodeID)
+	failureCallbacksMu sync.RWMutex
 }
 
 func NewController(config utils.Config) (*Controller, error) {
 	network := utils.NewNetworkLayer()
 	membership := utils.NewMembershipList(config.NodeID)
+	var controller *Controller
 	opts := utils.Options{
 		SuspicionTimeout:   2 * time.Second,
 		CheckInterval:      200 * time.Millisecond,
@@ -97,6 +100,9 @@ func NewController(config utils.Config) (*Controller, error) {
 				network.Send(msg, r.Address())
 			}
 			log.Printf("FAILED: %s inc=%d", target, inc)
+			if controller != nil {
+				controller.invokeFailureCallbacks(target)
+			}
 		},
 		OnClear: func(target utils.NodeID, inc int32) {
 			membership.Lock()
@@ -139,7 +145,7 @@ func NewController(config utils.Config) (*Controller, error) {
 	log.Println("Suspicion-based failure detection is ENABLED.")
 	// ---
 
-	controller := &Controller{
+	controller = &Controller{
 		pingAckManager: pingAckManager,
 		membership:     membership,
 		network:        network,
@@ -147,6 +153,27 @@ func NewController(config utils.Config) (*Controller, error) {
 	}
 
 	return controller, nil
+}
+
+// RegisterFailureCallback adds a hook that fires whenever the controller confirms a node failure.
+func (c *Controller) RegisterFailureCallback(cb func(utils.NodeID)) {
+	if cb == nil {
+		return
+	}
+	c.failureCallbacksMu.Lock()
+	c.failureCallbacks = append(c.failureCallbacks, cb)
+	c.failureCallbacksMu.Unlock()
+}
+
+func (c *Controller) invokeFailureCallbacks(target utils.NodeID) {
+	c.failureCallbacksMu.RLock()
+	callbacks := make([]func(utils.NodeID), len(c.failureCallbacks))
+	copy(callbacks, c.failureCallbacks)
+	c.failureCallbacksMu.RUnlock()
+
+	for _, cb := range callbacks {
+		cb(target)
+	}
 }
 
 func (c *Controller) Start() error {
@@ -249,8 +276,7 @@ func main() {
 		isIntroducer  = flag.Bool("is-introducer", false, "Act as introducer")
 		cmd           = flag.String("cmd", "", "Client command: list_mem, list_mem_ids, list_self, join, leave, display_suspects, grep_logs, create, get, append, merge, ls, liststore, getfromreplica, multiappend")
 		controlPortIn = flag.Int("control-port", 0, "Control server port on localhost (default: port+10000)")
-		// **** FIX: Removed arg1 and arg2 flags ****
-		foreground = flag.Bool("foreground", false, "Run in foreground (do not daemonize)")
+		foreground    = flag.Bool("foreground", false, "Run in foreground (do not daemonize)")
 	)
 	flag.Parse()
 
@@ -261,7 +287,6 @@ func main() {
 
 	// If -cmd is provided, act as a client and exit
 	if *cmd != "" {
-		// **** FIX: Pass flag.Args() which contains the positional arguments ****
 		runClient(*cmd, controlPort, flag.Args())
 		return
 	}
@@ -429,6 +454,7 @@ func NewControlServer(c *Controller, hyServer *hydfs.Server, controlPort int) *C
 	mux.HandleFunc("/internal/write", cs.hydfs.HandleInternalWrite)
 	mux.HandleFunc("/internal/get-meta", cs.hydfs.HandleInternalGetMeta)
 	mux.HandleFunc("/internal/get-block", cs.hydfs.HandleInternalGetBlock)
+	mux.HandleFunc("/internal/list-files", cs.hydfs.HandleInternalListFiles)
 	mux.HandleFunc("/internal/write-meta", cs.hydfs.HandleInternalWriteMeta)
 
 	cs.srv = &http.Server{
@@ -440,7 +466,7 @@ func NewControlServer(c *Controller, hyServer *hydfs.Server, controlPort int) *C
 
 func (cs *ControlServer) Start() {
 	go func() {
-		log.Printf("Control server listening on http://%s", cs.srv.Addr)
+		log.Printf("Control server listening on all interfaces at port %s", cs.srv.Addr)
 		if err := cs.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("control server error: %v", err)
 		}
@@ -515,7 +541,6 @@ func buildRemoteBaseURL(host string, defaultControlPort int) string {
 	return fmt.Sprintf("http://%s", host)
 }
 
-// **** FIX: Changed signature to accept positional arguments ****
 func runClient(cmd string, controlPort int, args []string) {
 	localBase := fmt.Sprintf("http://127.0.0.1:%d", controlPort)
 	var endpoint string

@@ -24,8 +24,9 @@ type BlockInfo struct {
 // This log defines the file's contents and order
 type Metadata struct {
 	sync.RWMutex
-	FileID string      `json:"file_id"` // Hash of the HyDFSfilename
-	Blocks []BlockInfo `json:"blocks"`  // Ordered list of blocks
+	FileID   string      `json:"file_id"` // Hash of the HyDFSfilename
+	Filename string      `json:"filename,omitempty"`
+	Blocks   []BlockInfo `json:"blocks"` // Ordered list of blocks
 }
 
 // Server is the main HyDFS service component
@@ -41,6 +42,7 @@ type Server struct {
 	// New fields for distributed communication
 	Client      *http.Client // HTTP client for node-to-node communication
 	ControlPort int          // The port number for the control server
+	replState   int32        // tracks if a re-replication pass is in-flight
 }
 
 // Internal (node-to-node) request payloads

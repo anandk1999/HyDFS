@@ -59,9 +59,8 @@ func (s *Server) backgroundTasks() {
 			return
 		case <-ticker.C:
 			s.ring.UpdateRing()
-			// log.Println("[HyDFS] Background task: Ring updated.")
-			// s.checkForReReplication() // Stub for re-replication logic
-			// s.checkForRebalancing()   // Stub for re-balancing logic
+			// Check for files that need re-replication
+			s.checkForReReplication()
 		}
 	}
 }
@@ -118,8 +117,9 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Size:      header.Size,
 	}
 	meta := &Metadata{
-		FileID: fileID,
-		Blocks: []BlockInfo{blockInfo},
+		FileID:   fileID,
+		Filename: hydfsFilename,
+		Blocks:   []BlockInfo{blockInfo},
 	}
 	metaBytes, _ := json.Marshal(meta)
 
@@ -185,6 +185,9 @@ func (s *Server) HandleAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	winningMeta := s.findWinningMetadata(allMetas)
+	if winningMeta.Filename == "" {
+		winningMeta.Filename = hydfsFilename
+	}
 
 	// 3. Create new BlockInfo and update the metadata
 	blockInfo := BlockInfo{
@@ -336,8 +339,9 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 	})
 
 	goldenMeta := &Metadata{
-		FileID: fileID,
-		Blocks: mergedBlocks,
+		FileID:   fileID,
+		Filename: hydfsFilename,
+		Blocks:   mergedBlocks,
 	}
 
 	// 4. Propagate "golden" metadata to ALL replicas
@@ -355,6 +359,7 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleLs handles the 'ls' command
+// Shows which VMs store the replicas of a given file
 func (s *Server) HandleLs(w http.ResponseWriter, r *http.Request) {
 	hydfsFilename := r.URL.Query().Get("hydfsfile")
 	if hydfsFilename == "" {
@@ -500,6 +505,18 @@ func (s *Server) HandleInternalGetBlock(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, file)
+}
+
+// HandleInternalListFiles returns a list of all file IDs stored on this node
+func (s *Server) HandleInternalListFiles(w http.ResponseWriter, r *http.Request) {
+	fileIDs, err := s.store.ListLocalFiles()
+	if err != nil {
+		http.Error(w, "Failed to list files", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(fileIDs)
 }
 
 // HandleInternalWriteMeta overwrites the local metadata with a "golden" version (from merge/read-repair)
