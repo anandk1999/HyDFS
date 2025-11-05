@@ -341,11 +341,16 @@ func main() {
 
 	// --- MP1 Log Querier Server Setup ---
 	logFilePath := filepath.Join(workDir, "node.log")
-	if f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND, 0o644); err != nil {
-		log.Fatalf("Failed to ensure node.log exists: %v", err)
-	} else {
-		_ = f.Close()
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("Failed to open node.log for writing: %v", err)
 	}
+	defer logFile.Close()
+	
+	// Redirect all log output to node.log (as required by spec)
+	multiWriter := io.MultiWriter(os.Stderr, logFile)
+	log.SetOutput(multiWriter)
+	log.Printf("[Main] Logging to %s", logFilePath)
 
 	logSrvCfg := logserver.Config{
 		Addr:             fmt.Sprintf(":%d", logcommon.DefaultPort),
@@ -463,6 +468,7 @@ func NewControlServer(c *Controller, hyServer *hydfs.Server, controlPort int) *C
 	mux.HandleFunc("/internal/list-files", cs.hydfs.HandleInternalListFiles)
 	mux.HandleFunc("/internal/write-meta", cs.hydfs.HandleInternalWriteMeta)
 	mux.HandleFunc("/internal/delete", cs.hydfs.HandleInternalDelete)
+	mux.HandleFunc("/internal/get-local", cs.hydfs.HandleInternalGetLocal)
 
 	cs.srv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", controlPort),
@@ -623,8 +629,9 @@ func runClient(cmd string, controlPort int, args []string) {
 		localFilename := args[2]
 
 		remoteBase := buildRemoteBaseURL(vmAddress, controlPort)
-		remoteURL := remoteBase + "/get?hydfsfile=" + url.QueryEscape(hydfsFilename)
-		log.Printf("Attempting to fetch from remote replica: %s", remoteURL)
+		// Use internal/get-local to fetch from ONLY this replica (no quorum)
+		remoteURL := remoteBase + "/internal/get-local?hydfsfile=" + url.QueryEscape(hydfsFilename)
+		log.Printf("Attempting to fetch from specific replica: %s", remoteURL)
 		err = httpGetFile(remoteURL, localFilename)
 
 	case "multiappend":
@@ -651,7 +658,7 @@ func runClient(cmd string, controlPort int, args []string) {
 				remoteBase := buildRemoteBaseURL(vm, controlPort)
 				remoteURL := remoteBase + "/append"
 				log.Printf("-> Starting append from %s (file: %s) to %s", vm, lfile, hydfsFilename)
-				if err := httpPostFile(remoteURL, lfile, hydfsFilename, true); err != nil {
+				if err := httpPostFile(remoteURL, lfile, hydfsFilename, false); err != nil {
 					log.Printf("ERROR from %s: %v", vm, err)
 				} else {
 					log.Printf("<- Finished append from %s", vm)

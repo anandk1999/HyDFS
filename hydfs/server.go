@@ -292,8 +292,15 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'hydfsfile' form value", http.StatusBadRequest)
 		return
 	}
+	
+	// Extract client identity (IP:Port from remote address)
+	clientID := r.RemoteAddr
+	if clientID == "" {
+		clientID = "unknown_client"
+	}
+	
 	fileID := s.getFileID(hydfsFilename)
-	log.Printf("[HyDFS] Received /create for %s (ID: %s)", hydfsFilename, fileID)
+	log.Printf("[HyDFS] Received /create for %s (ID: %s) from client %s", hydfsFilename, fileID, clientID)
 
 	file, header, err := r.FormFile("localfile")
 	if err != nil {
@@ -310,10 +317,11 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Create block info and metadata
+	timestamp := time.Now().UnixNano()
 	blockInfo := BlockInfo{
-		BlockID:   fmt.Sprintf("%s_%d", "client_initial", time.Now().UnixNano()),
-		ClientID:  "client_initial",
-		Timestamp: time.Now().UnixNano(),
+		BlockID:   fmt.Sprintf("%s_%d", clientID, timestamp),
+		ClientID:  clientID,
+		Timestamp: timestamp,
 		Size:      header.Size,
 	}
 	meta := &Metadata{
@@ -341,7 +349,7 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[HyDFS] Create for %s completed (W=%d)", hydfsFilename, ackCount)
-	fmt.Fprintf(w, "File %s created successfully on replicas (W=%d & FileID=%d):\n", hydfsFilename, ackCount, fileID)
+	fmt.Fprintf(w, "File %s created successfully on replicas (W=%d & FileID=%s):\n", hydfsFilename, ackCount, fileID)
 	for _, rep := range replicas {
 		fmt.Fprintf(w, "  - %s\n", rep.Address())
 	}
@@ -359,8 +367,15 @@ func (s *Server) HandleAppend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'hydfsfile' form value", http.StatusBadRequest)
 		return
 	}
+	
+	// Extract client identity (IP:Port from remote address)
+	clientID := r.RemoteAddr
+	if clientID == "" {
+		clientID = "unknown_client"
+	}
+	
 	fileID := s.getFileID(hydfsFilename)
-	log.Printf("[HyDFS] Received /append for %s (ID: %s)", hydfsFilename, fileID)
+	log.Printf("[HyDFS] Received /append for %s (ID: %s) from client %s", hydfsFilename, fileID, clientID)
 
 	file, header, err := r.FormFile("localfile")
 	if err != nil {
@@ -390,10 +405,11 @@ func (s *Server) HandleAppend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Create new BlockInfo and update the metadata
+	timestamp := time.Now().UnixNano()
 	blockInfo := BlockInfo{
-		BlockID:   fmt.Sprintf("%s_%d", "client_append", time.Now().UnixNano()),
-		ClientID:  "client_append", // TODO: Get from request
-		Timestamp: time.Now().UnixNano(),
+		BlockID:   fmt.Sprintf("%s_%d", clientID, timestamp),
+		ClientID:  clientID,
+		Timestamp: timestamp,
 		Size:      header.Size,
 	}
 	winningMeta.Blocks = append(winningMeta.Blocks, blockInfo)
@@ -644,6 +660,8 @@ func (s *Server) HandleInternalWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid blockinfo JSON", http.StatusBadRequest)
 		return
 	}
+	
+	log.Printf("[HyDFS-Replica] RECEIVED write request for file %s (block: %s)", meta.Filename, blockInfo.BlockID)
 
 	// 1. Write the block data
 	if _, err := s.store.WriteBlock(fileID, blockInfo.BlockID, file); err != nil {
@@ -659,7 +677,7 @@ func (s *Server) HandleInternalWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[HyDFS-Replica] Successfully stored block %s for file %s", blockInfo.BlockID, fileID)
+	log.Printf("[HyDFS-Replica] COMPLETED write for file %s (block: %s)", meta.Filename, blockInfo.BlockID)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -699,9 +717,12 @@ func (s *Server) HandleInternalGetBlock(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	log.Printf("[HyDFS-Replica] RECEIVED get-block request for file %s (block: %s)", fileID, blockID)
+
 	file, err := s.store.ReadBlock(fileID, blockID)
 	if err != nil {
 		if os.IsNotExist(err) {
+			log.Printf("[HyDFS-Replica] Block %s not found", blockID)
 			http.Error(w, "Block not found", http.StatusNotFound)
 			return
 		}
@@ -712,6 +733,7 @@ func (s *Server) HandleInternalGetBlock(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, file)
+	log.Printf("[HyDFS-Replica] COMPLETED get-block for file %s (block: %s)", fileID, blockID)
 }
 
 // HandleInternalListFiles returns a list of all file IDs stored on this node
@@ -766,6 +788,53 @@ func (s *Server) HandleInternalDelete(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[HyDFS-Replica] Successfully deleted file %s", fileID)
 	w.WriteHeader(http.StatusOK)
+}
+
+// HandleInternalGetLocal fetches a file from LOCAL storage only (no quorum read)
+// This is used by getfromreplica to inspect individual replica state
+func (s *Server) HandleInternalGetLocal(w http.ResponseWriter, r *http.Request) {
+	hydfsFilename := r.URL.Query().Get("hydfsfile")
+	if hydfsFilename == "" {
+		http.Error(w, "Missing 'hydfsfile' query param", http.StatusBadRequest)
+		return
+	}
+	fileID := s.getFileID(hydfsFilename)
+	log.Printf("[HyDFS-Replica] Received /internal/get-local for %s (ID: %s)", hydfsFilename, fileID)
+
+	// Read LOCAL metadata only
+	meta, err := s.store.ReadMetadata(fileID)
+	if err != nil {
+		log.Printf("[HyDFS-Replica] Failed to read local metadata for %s: %v", fileID, err)
+		http.Error(w, "File not found locally", http.StatusNotFound)
+		return
+	}
+
+	if len(meta.Blocks) == 0 {
+		log.Printf("[HyDFS-Replica] No blocks found for %s locally", fileID)
+		http.Error(w, "File not found locally", http.StatusNotFound)
+		return
+	}
+
+	// Stream blocks from local storage
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", hydfsFilename))
+
+	for _, blockInfo := range meta.Blocks {
+		file, err := s.store.ReadBlock(fileID, blockInfo.BlockID)
+		if err != nil {
+			log.Printf("[HyDFS-Replica] Failed to read local block %s: %v", blockInfo.BlockID, err)
+			http.Error(w, "Failed to read block from local storage", http.StatusInternalServerError)
+			return
+		}
+
+		if _, err := io.Copy(w, file); err != nil {
+			log.Printf("[HyDFS-Replica] Error streaming local block: %v", err)
+			file.Close()
+			return
+		}
+		file.Close()
+	}
+	log.Printf("[HyDFS-Replica] Successfully streamed local file %s", hydfsFilename)
 }
 
 // ###########################################################################
@@ -877,18 +946,111 @@ func (s *Server) findWinningMetadata(allMetas []*Metadata) *Metadata {
 }
 
 // dispatchWriteMetas fans out a "golden" metadata to all replicas (for merge/read-repair)
+// Also replicates any missing blocks to ensure eventual consistency
 func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, goldenMeta *Metadata) int {
 	var wg sync.WaitGroup
 	ackChan := make(chan bool, len(replicas))
-
-	metaBytes, _ := json.Marshal(goldenMeta)
 
 	for _, replica := range replicas {
 		wg.Add(1)
 		go func(node utils.NodeID) {
 			defer wg.Done()
-			url := s.buildReplicaURL(node, fmt.Sprintf("/internal/write-meta?fileid=%s", fileID))
-			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(metaBytes))
+			
+			// Step 1: Get current metadata from this replica
+			metaURL := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
+			metaResp, err := s.Client.Get(metaURL)
+			
+			var replicaMeta Metadata
+			if err == nil && metaResp.StatusCode == http.StatusOK {
+				json.NewDecoder(metaResp.Body).Decode(&replicaMeta)
+				metaResp.Body.Close()
+			}
+			
+			// Step 2: Identify missing blocks
+			replicaBlockIDs := make(map[string]bool)
+			for _, block := range replicaMeta.Blocks {
+				replicaBlockIDs[block.BlockID] = true
+			}
+			
+			missingBlocks := make([]BlockInfo, 0)
+			for _, block := range goldenMeta.Blocks {
+				if !replicaBlockIDs[block.BlockID] {
+					missingBlocks = append(missingBlocks, block)
+				}
+			}
+			
+			// Step 3: Replicate missing blocks from self or other replicas
+			if len(missingBlocks) > 0 {
+				log.Printf("[HyDFS-Coord] Replicating %d missing blocks to %s for file %s", 
+					len(missingBlocks), node.Address(), fileID)
+				
+				for _, block := range missingBlocks {
+					// Try to fetch block from local storage first
+					blockFile, err := s.store.ReadBlock(fileID, block.BlockID)
+					var blockData []byte
+					
+					if err == nil {
+						blockData, _ = io.ReadAll(blockFile)
+						blockFile.Close()
+					} else {
+						// Block not local, fetch from another replica
+						for _, sourceReplica := range replicas {
+							if sourceReplica.String() == node.String() {
+								continue
+							}
+							blockURL := s.buildReplicaURL(sourceReplica, 
+								fmt.Sprintf("/internal/get-block?fileid=%s&blockid=%s", fileID, block.BlockID))
+							blockResp, blockErr := s.Client.Get(blockURL)
+							if blockErr == nil && blockResp.StatusCode == http.StatusOK {
+								blockData, _ = io.ReadAll(blockResp.Body)
+								blockResp.Body.Close()
+								break
+							}
+							if blockResp != nil {
+								blockResp.Body.Close()
+							}
+						}
+					}
+					
+					if blockData == nil {
+						log.Printf("[HyDFS-Coord] Could not find block %s to replicate", block.BlockID)
+						continue
+					}
+					
+					// Write block to target replica
+					body := &bytes.Buffer{}
+					writer := multipart.NewWriter(body)
+					writer.WriteField("fileid", fileID)
+					metaBytes, _ := json.Marshal(goldenMeta)
+					writer.WriteField("metadata", string(metaBytes))
+					blockInfoBytes, _ := json.Marshal(block)
+					writer.WriteField("blockinfo", string(blockInfoBytes))
+					
+					part, _ := writer.CreateFormFile("blockdata", block.BlockID)
+					part.Write(blockData)
+					writer.Close()
+					
+					writeURL := s.buildReplicaURL(node, "/internal/write")
+					req, _ := http.NewRequest(http.MethodPost, writeURL, body)
+					req.Header.Set("Content-Type", writer.FormDataContentType())
+					
+					resp, err := s.Client.Do(req)
+					if err == nil && resp.StatusCode == http.StatusOK {
+						resp.Body.Close()
+					} else {
+						log.Printf("[HyDFS-Coord] Failed to replicate block %s to %s: %v", 
+							block.BlockID, node.Address(), err)
+						if resp != nil {
+							resp.Body.Close()
+						}
+					}
+				}
+			}
+			
+			// Step 4: Update metadata
+			metaBytes, _ := json.Marshal(goldenMeta)
+			writeMetaURL := s.buildReplicaURL(node, fmt.Sprintf("/internal/write-meta?fileid=%s", fileID))
+			req, _ := http.NewRequest(http.MethodPost, writeMetaURL, bytes.NewReader(metaBytes))
 			req.Header.Set("Content-Type", "application/json")
 
 			resp, err := s.Client.Do(req)

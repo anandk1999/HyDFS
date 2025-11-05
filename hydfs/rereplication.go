@@ -247,6 +247,13 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 // and redistributes if necessary (e.g., after node joins)
 func (s *Server) checkAndRebalance(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
 	filename := s.resolveFilename(meta)
+	
+	// Refresh metadata from quorum to ensure we replicate the latest version
+	freshMetas := s.performGetMetadata(currentReplicas, fileID)
+	if len(freshMetas) > 0 {
+		meta = s.findWinningMetadata(freshMetas)
+	}
+	
 	desiredReplicas := s.ring.GetSuccessors(filename, 3)
 
 	if len(desiredReplicas) == 0 {
