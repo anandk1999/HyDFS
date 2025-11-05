@@ -71,8 +71,198 @@ func (s *Server) backgroundTasks() {
 
 			// Check for files that need re-replication
 			s.checkForReReplication()
+
+			// Periodic background merge to reconcile divergent file versions
+			s.checkAndMergeDivergentFiles()
 		}
 	}
+}
+
+// checkAndMergeDivergentFiles periodically checks for files with divergent versions
+// across replicas and automatically merges them to ensure consistency
+func (s *Server) checkAndMergeDivergentFiles() {
+	fileIDs, err := s.store.ListLocalFiles()
+	if err != nil {
+		return
+	}
+
+	for _, fileID := range fileIDs {
+		// Get metadata from local storage to find filename
+		localMeta, err := s.store.ReadMetadata(fileID)
+		if err != nil || localMeta == nil {
+			continue
+		}
+
+		filename := s.resolveFilename(localMeta)
+		replicas := s.ring.GetSuccessors(filename, 3)
+		if len(replicas) < 2 {
+			continue // Need at least 2 replicas to detect divergence
+		}
+
+		// Get metadata from all replicas
+		allMetas := s.performGetMetadata(replicas, fileID)
+		if len(allMetas) < 2 {
+			continue // Can't detect divergence without multiple versions
+		}
+
+		// Check if replicas have divergent versions (different block counts or sets)
+		if s.hasMetadataDivergence(allMetas) {
+			log.Printf("[BackgroundMerge] Detected divergence in file %s (%s), merging...", fileID, filename)
+			go s.performBackgroundMerge(fileID, filename, replicas)
+		}
+	}
+}
+
+// hasMetadataDivergence checks if metadata versions differ across replicas
+func (s *Server) hasMetadataDivergence(metas []*Metadata) bool {
+	if len(metas) <= 1 {
+		return false
+	}
+
+	// Compare block counts first (quick check)
+	firstBlockCount := len(metas[0].Blocks)
+	for i := 1; i < len(metas); i++ {
+		if len(metas[i].Blocks) != firstBlockCount {
+			return true // Different block counts = divergence
+		}
+	}
+
+	// If same count, check if block IDs match
+	firstBlockIDs := make(map[string]bool)
+	for _, block := range metas[0].Blocks {
+		firstBlockIDs[block.BlockID] = true
+	}
+
+	for i := 1; i < len(metas); i++ {
+		for _, block := range metas[i].Blocks {
+			if !firstBlockIDs[block.BlockID] {
+				return true // Different blocks = divergence
+			}
+		}
+	}
+
+	return false // All replicas have identical metadata
+}
+
+// performBackgroundMerge executes merge logic automatically in the background
+func (s *Server) performBackgroundMerge(fileID, filename string, replicas []utils.NodeID) {
+	// Get metadata from all replicas WITH node tracking
+	metaResponses := s.performGetMetadataWithNodes(replicas, fileID)
+	if len(metaResponses) == 0 {
+		return
+	}
+
+	// Collect all unique blocks from all metadata versions
+	uniqueBlocks := make(map[string]BlockInfo)
+	for _, resp := range metaResponses {
+		if resp.Meta != nil {
+			for _, block := range resp.Meta.Blocks {
+				uniqueBlocks[block.BlockID] = block
+			}
+		}
+	}
+
+	// Create merged list
+	mergedBlocks := make([]BlockInfo, 0, len(uniqueBlocks))
+	for _, block := range uniqueBlocks {
+		mergedBlocks = append(mergedBlocks, block)
+	}
+
+	// Sort by (ClientID, Timestamp) to preserve per-client ordering
+	sort.SliceStable(mergedBlocks, func(i, j int) bool {
+		if mergedBlocks[i].ClientID == mergedBlocks[j].ClientID {
+			return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
+		}
+		return mergedBlocks[i].ClientID < mergedBlocks[j].ClientID
+	})
+
+	goldenMeta := &Metadata{
+		FileID:   fileID,
+		Filename: filename,
+		Blocks:   mergedBlocks,
+	}
+
+	// Compare each replica's metadata against the golden version
+	outdatedReplicas := make([]utils.NodeID, 0)
+	for _, resp := range metaResponses {
+		if resp.Meta != nil && !s.isMetadataUpToDate(resp.Meta, goldenMeta) {
+			outdatedReplicas = append(outdatedReplicas, resp.Node)
+		}
+	}
+
+	// If no outdated replicas found, everyone is already in sync
+	if len(outdatedReplicas) == 0 {
+		log.Printf("[BackgroundMerge] All replicas already in sync for file %s (%s)", fileID, filename)
+		return
+	}
+
+	// Propagate golden metadata ONLY to outdated replicas (bandwidth optimization)
+	ackCount := s.dispatchWriteMetas(outdatedReplicas, fileID, goldenMeta)
+	log.Printf("[BackgroundMerge] Merged file %s (%s), updated %d/%d outdated replicas (skipped %d already in sync)",
+		fileID, filename, ackCount, len(outdatedReplicas), len(replicas)-len(outdatedReplicas))
+}
+
+// performGetMetadataWithNodes fetches metadata from replicas and tracks which node has which version
+func (s *Server) performGetMetadataWithNodes(replicas []utils.NodeID, fileID string) []metaResponse {
+	var wg sync.WaitGroup
+	respChan := make(chan metaResponse, len(replicas))
+
+	for _, replica := range replicas {
+		wg.Add(1)
+		go func(node utils.NodeID) {
+			defer wg.Done()
+			url := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
+			resp, err := s.Client.Get(url)
+
+			if err == nil && resp.StatusCode == http.StatusOK {
+				var meta Metadata
+				if decodeErr := json.NewDecoder(resp.Body).Decode(&meta); decodeErr == nil {
+					respChan <- metaResponse{Meta: &meta, Node: node, Err: nil}
+				} else {
+					respChan <- metaResponse{Meta: nil, Node: node, Err: decodeErr}
+				}
+				resp.Body.Close()
+			} else {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				respChan <- metaResponse{Meta: nil, Node: node, Err: err}
+			}
+		}(replica)
+	}
+
+	wg.Wait()
+	close(respChan)
+
+	responses := make([]metaResponse, 0, len(replicas))
+	for resp := range respChan {
+		if resp.Meta != nil { // Only include successful responses
+			responses = append(responses, resp)
+		}
+	}
+	return responses
+}
+
+// isMetadataUpToDate checks if a replica's metadata matches the golden version
+func (s *Server) isMetadataUpToDate(replicaMeta, goldenMeta *Metadata) bool {
+	if len(replicaMeta.Blocks) != len(goldenMeta.Blocks) {
+		return false
+	}
+
+	// Create a set of golden block IDs for quick lookup
+	goldenBlockIDs := make(map[string]bool)
+	for _, block := range goldenMeta.Blocks {
+		goldenBlockIDs[block.BlockID] = true
+	}
+
+	// Check if replica has all golden blocks
+	for _, block := range replicaMeta.Blocks {
+		if !goldenBlockIDs[block.BlockID] {
+			return false
+		}
+	}
+
+	return true // Replica is up-to-date
 }
 
 // getFileID is a helper to hash the filename
@@ -143,10 +333,10 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	// 4. Fan-out write to replicas
 	ackCount := s.dispatchWrites(replicas, fileID, blockInfo, fileData.Bytes(), metaBytes)
 
-	// 5. Check for Write Quorum (W=3)
+	// 5. Check for Write Quorum (W=3) - Strong consistency for initial file creation
 	if ackCount < 3 {
 		log.Printf("[HyDFS] Create for %s FAILED quorum (W=%d)", hydfsFilename, ackCount)
-		http.Error(w, fmt.Sprintf("Write quorum failed (W=%d, required W=2)", ackCount), http.StatusServiceUnavailable)
+		http.Error(w, fmt.Sprintf("Write quorum failed (W=%d, required W=3)", ackCount), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -219,7 +409,7 @@ func (s *Server) HandleAppend(w http.ResponseWriter, r *http.Request) {
 	// 5. Fan-out write to replicas
 	ackCount := s.dispatchWrites(replicas, fileID, blockInfo, fileData.Bytes(), metaBytes)
 
-	// 6. Check for Write Quorum (W=2)
+	// 6. Check for Write Quorum (W=2) - Eventual consistency per spec (W=2, R=2)
 	if ackCount < 2 {
 		log.Printf("[HyDFS] Append for %s FAILED write quorum (W=%d)", hydfsFilename, ackCount)
 		http.Error(w, fmt.Sprintf("Write quorum failed (W=%d, required W=2)", ackCount), http.StatusServiceUnavailable)
@@ -250,7 +440,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Perform Read Quorum (R=2) to get winning metadata
+	// 2. Perform Read Quorum (R=2) - Eventual consistency per spec (W=2, R=2)
 	allMetas := s.performGetMetadata(replicas, fileID)
 	if len(allMetas) < 2 {
 		log.Printf("[HyDFS] Get for %s FAILED read quorum (R=%d)", hydfsFilename, len(allMetas))
