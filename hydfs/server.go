@@ -143,8 +143,8 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	// 4. Fan-out write to replicas
 	ackCount := s.dispatchWrites(replicas, fileID, blockInfo, fileData.Bytes(), metaBytes)
 
-	// 5. Check for Write Quorum (W=2)
-	if ackCount < 2 {
+	// 5. Check for Write Quorum (W=3)
+	if ackCount < 3 {
 		log.Printf("[HyDFS] Create for %s FAILED quorum (W=%d)", hydfsFilename, ackCount)
 		http.Error(w, fmt.Sprintf("Write quorum failed (W=%d, required W=2)", ackCount), http.StatusServiceUnavailable)
 		return
