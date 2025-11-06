@@ -23,6 +23,12 @@ func (s *Server) checkForReReplication() {
 // TriggerReReplication allows external observers (e.g., failure detector) to kick off
 // an immediate re-replication attempt.
 func (s *Server) TriggerReReplication(reason string) {
+	// Add delay before starting re-replication to let membership stabilize
+	// This is critical when nodes fail/leave to avoid network flooding
+	if reason != "background" {
+		log.Printf("[ReReplication] Delaying re-replication for 3s (reason=%s) to stabilize membership", reason)
+		time.Sleep(3 * time.Second)
+	}
 	go s.runReReplication(reason)
 }
 
@@ -48,9 +54,15 @@ func (s *Server) performReReplication(reason string) {
 	shouldRebalance := reason != "background"
 
 	for i, fileID := range fileIDs {
-		// Add throttling between file re-replications to reduce network load
-		if i > 0 && i%5 == 0 {
-			time.Sleep(500 * time.Millisecond) // Brief pause every 5 files
+		// Add more aggressive throttling between file re-replications
+		// This is CRITICAL to prevent network flooding during mass re-replication
+		if i > 0 {
+			// Longer delay between each file, especially for triggered re-replication
+			if reason != "background" {
+				time.Sleep(1 * time.Second) // 1 second between files for triggered events
+			} else if i%3 == 0 {
+				time.Sleep(500 * time.Millisecond) // Brief pause every 3 files for background
+			}
 		}
 
 		meta, err := s.store.ReadMetadata(fileID)
@@ -76,8 +88,9 @@ func (s *Server) findCurrentReplicasForFile(fileID string) []utils.NodeID {
 	var wg sync.WaitGroup
 	replicaChan := make(chan utils.NodeID, len(members))
 
-	// Limit concurrent replica checks to avoid network flooding
-	semaphore := make(chan struct{}, 5) // Max 5 concurrent checks
+	// CRITICAL: Very limited concurrency to avoid overwhelming network
+	// Even 5 concurrent HTTP requests during mass re-replication can flood the network
+	semaphore := make(chan struct{}, 2) // Reduced to max 2 concurrent checks
 
 	for _, member := range members {
 		if member.Status != utils.Alive {
@@ -90,6 +103,9 @@ func (s *Server) findCurrentReplicasForFile(fileID string) []utils.NodeID {
 			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+
+			// Add small delay between checks to pace requests
+			time.Sleep(50 * time.Millisecond)
 
 			url := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
 			resp, err := s.Client.Get(url)
