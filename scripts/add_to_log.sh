@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Appends a small block of text to the machine.N.log on each VM.
 # Uses REMOTE_USER from .env if present.

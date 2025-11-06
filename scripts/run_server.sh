@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Starts the server using air on all hosts if port 8080 is free.
 # Load remote username

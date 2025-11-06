@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Runs a git (or any) command inside the mp3-g02 repo on each host.
 # Example: ./git_command.sh "git status -sb"

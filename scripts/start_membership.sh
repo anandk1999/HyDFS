@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Simple script to start distributed membership system
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

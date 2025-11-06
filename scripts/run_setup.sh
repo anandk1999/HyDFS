@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Runs the local setup.sh on every host with nohup so it continues on the VM.
 # Load remote username

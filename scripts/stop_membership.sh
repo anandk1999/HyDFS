@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Stops all mp2-node processes on all hosts
 # Load remote username

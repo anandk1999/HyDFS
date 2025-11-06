@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Load remote username
 SCRIPT_PATH=${0:A}

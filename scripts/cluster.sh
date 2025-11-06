@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # ==============================================================================
 # HyDFS Cluster Management Script for CS425 VMs

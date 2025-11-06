@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Runs the Go log generator on each host to create machine.N.log files.
 # Load remote username

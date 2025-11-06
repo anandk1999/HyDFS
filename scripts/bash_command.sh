@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Runs an arbitrary shell command on all hosts listed in hosts.txt.
 # Example: ./bash_command.sh 'uname -a'
