@@ -29,6 +29,13 @@ type indirectPingWaiter struct {
 	createdTime time.Time
 }
 
+// failedNodeEntry tracks when a node was marked as failed
+type failedNodeEntry struct {
+	nodeID      utils.NodeID
+	incarnation int32
+	timestamp   time.Time
+}
+
 // PingAckManager runs the SWIM-style ping/ack protocol.
 type PingAckManager struct {
 	membership      *utils.MembershipList
@@ -47,6 +54,8 @@ type PingAckManager struct {
 	cancel context.CancelFunc
 	// Timeout configuration
 	timeouts utils.TimeoutConfig
+	// Track recently failed nodes to prevent re-adding from stale gossip
+	recentlyFailed map[string]*failedNodeEntry
 }
 
 // NewPingAckManager wires up the manager with default timeouts.
@@ -66,6 +75,7 @@ func NewPingAckManager(ml *utils.MembershipList, net *utils.NetworkLayer, suspic
 		ctx:             ctx,
 		cancel:          cancel,
 		timeouts:        utils.OptimalTimeoutConfig(), // Use optimal config by default
+		recentlyFailed:  make(map[string]*failedNodeEntry),
 	}
 }
 
@@ -86,6 +96,7 @@ func NewPingAckManagerWithTimeouts(ml *utils.MembershipList, net *utils.NetworkL
 		ctx:             ctx,
 		cancel:          cancel,
 		timeouts:        timeouts,
+		recentlyFailed:  make(map[string]*failedNodeEntry),
 	}
 }
 
@@ -338,6 +349,15 @@ func (p *PingAckManager) processUpdate(update utils.MemberUpdate, reporter utils
 			}
 		}
 		p.membership.Unlock()
+
+		// Track this as a recently failed node to prevent re-adding from stale gossip
+		p.mu.Lock()
+		p.recentlyFailed[memberKey] = &failedNodeEntry{
+			nodeID:      update.NodeID,
+			incarnation: update.Incarnation,
+			timestamp:   time.Now(),
+		}
+		p.mu.Unlock()
 		return
 	}
 
@@ -345,9 +365,25 @@ func (p *PingAckManager) processUpdate(update utils.MemberUpdate, reporter utils
 	member, exists := p.membership.Members[memberKey]
 
 	if !exists {
-		// Don't add nodes with FAILED status, and don't re-add nodes from stale gossip
-		// If we don't know about this node, it might have left and we shouldn't re-add it
-		// based on stale ALIVE gossip
+		// Check if this node was recently marked as failed
+		p.mu.Lock()
+		failedEntry, wasFailed := p.recentlyFailed[memberKey]
+		p.mu.Unlock()
+
+		// Don't re-add nodes that were recently failed unless incarnation is higher
+		if wasFailed && update.Incarnation <= failedEntry.incarnation {
+			p.membership.Unlock()
+			return
+		}
+
+		// If incarnation is higher, remove from failed list and allow re-add (genuine rejoin)
+		if wasFailed && update.Incarnation > failedEntry.incarnation {
+			p.mu.Lock()
+			delete(p.recentlyFailed, memberKey)
+			p.mu.Unlock()
+		}
+
+		// Don't add nodes with FAILED status
 		if update.Status == utils.Failed {
 			p.membership.Unlock()
 			return
@@ -477,10 +513,25 @@ func (p *PingAckManager) cleanupOrphanedEntries() {
 			delete(p.pendingIndirect, key)
 		}
 	}
+
+	// Clean up recentlyFailed entries older than 30 seconds
+	var failedToCleanup []string
+	for key, entry := range p.recentlyFailed {
+		if now.Sub(entry.timestamp) > 30*time.Second {
+			failedToCleanup = append(failedToCleanup, key)
+		}
+	}
+	for _, key := range failedToCleanup {
+		delete(p.recentlyFailed, key)
+	}
+
 	p.mu.Unlock()
 
 	if len(toCleanup) > 0 {
 		log.Printf("[PINGACK][INFO] INFO: Cleaned up %d orphaned pendingIndirect entries", len(toCleanup))
+	}
+	if len(failedToCleanup) > 0 {
+		log.Printf("[PINGACK][INFO] INFO: Cleaned up %d old recentlyFailed entries", len(failedToCleanup))
 	}
 }
 
@@ -518,9 +569,17 @@ func (p *PingAckManager) checkFailures() {
 		p.membership.AddRecentUpdateSafe(update)
 	}
 
+	// Track these nodes as recently failed
+	p.mu.Lock()
 	for _, m := range toRemove {
+		p.recentlyFailed[m.ID.String()] = &failedNodeEntry{
+			nodeID:      m.ID,
+			incarnation: m.Incarnation,
+			timestamp:   time.Now(),
+		}
 		log.Printf("[PINGACK][FAILED] FAILED: %s (suspicion timeout)", m.ID)
 	}
+	p.mu.Unlock()
 }
 
 // cloneMember creates a shallow copy so we can mutate outside the lock.
@@ -940,7 +999,9 @@ func (p *PingAckManager) handleSuspectMessage(msg utils.Message, from *net.UDPAd
 func (p *PingAckManager) handleLeave(msg utils.Message, from *net.UDPAddr) {
 	p.membership.Lock()
 	key := msg.Sender.String()
+	var removedMember *utils.Member
 	if m, ok := p.membership.Members[key]; ok {
+		removedMember = m
 		delete(p.membership.Members, key)
 		// record an update to piggyback removal
 		failedUpdate := &utils.Member{ID: m.ID, Status: utils.Failed, Incarnation: m.Incarnation}
@@ -948,6 +1009,17 @@ func (p *PingAckManager) handleLeave(msg utils.Message, from *net.UDPAddr) {
 		log.Printf("[PINGACK][LEAVE] LEAVE: %s", msg.Sender)
 	}
 	p.membership.Unlock()
+
+	// Track as recently failed to prevent re-adding from stale gossip
+	if removedMember != nil {
+		p.mu.Lock()
+		p.recentlyFailed[key] = &failedNodeEntry{
+			nodeID:      removedMember.ID,
+			incarnation: removedMember.Incarnation,
+			timestamp:   time.Now(),
+		}
+		p.mu.Unlock()
+	}
 }
 
 // JoinGroup sends a join request to the introducer (if any).
