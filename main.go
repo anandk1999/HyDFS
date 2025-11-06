@@ -346,7 +346,7 @@ func main() {
 		log.Fatalf("Failed to open node.log for writing: %v", err)
 	}
 	defer logFile.Close()
-	
+
 	// Redirect all log output to node.log (as required by spec)
 	multiWriter := io.MultiWriter(os.Stderr, logFile)
 	log.SetOutput(multiWriter)
@@ -655,13 +655,24 @@ func runClient(cmd string, controlPort int, args []string) {
 			wg.Add(1)
 			go func(vm, lfile string) {
 				defer wg.Done()
-				remoteBase := buildRemoteBaseURL(vm, controlPort)
-				remoteURL := remoteBase + "/append"
 				log.Printf("-> Starting append from %s (file: %s) to %s", vm, lfile, hydfsFilename)
-				if err := httpPostFile(remoteURL, lfile, hydfsFilename, false); err != nil {
-					log.Printf("ERROR from %s: %v", vm, err)
+
+				// Extract hostname for SSH (remove any port)
+				vmHost := vm
+				if strings.Contains(vm, ":") {
+					vmHost = vm[:strings.Index(vm, ":")]
+				}
+
+				// SSH to the VM and run the client append command there
+				sshCmd := exec.Command("ssh", vmHost,
+					fmt.Sprintf("cd mp3-g02 && ./client -cmd append %s %s",
+						lfile, hydfsFilename))
+
+				output, err := sshCmd.CombinedOutput()
+				if err != nil {
+					log.Printf("ERROR from %s: %v\nOutput: %s", vm, err, string(output))
 				} else {
-					log.Printf("<- Finished append from %s", vm)
+					log.Printf("<- Finished append from %s\nOutput: %s", vm, strings.TrimSpace(string(output)))
 				}
 			}(vmAddress, localFilename)
 		}
