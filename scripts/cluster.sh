@@ -40,7 +40,7 @@ else
     REMOTE_USER="saik2"
 fi
 PROJECT_DIR_NAME="mp3-g02" # Assumes this is the name of your repo's directory
-BINARY_NAME="mp2-node"
+BINARY_NAME="client"
 HOSTS_FILE="../hosts.txt"
 
 # Ensure hosts file exists
