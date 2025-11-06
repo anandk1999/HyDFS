@@ -325,10 +325,34 @@ func (p *PingAckManager) processUpdate(update utils.MemberUpdate, reporter utils
 		return
 	}
 
+	// Handle FAILED status - node has left or been confirmed as failed
+	if update.Status == utils.Failed {
+		p.membership.Lock()
+		if member, exists := p.membership.Members[memberKey]; exists {
+			// Only process if incarnation is at least as recent
+			if update.Incarnation >= member.Incarnation {
+				delete(p.membership.Members, memberKey)
+				failedUpdate := &utils.Member{ID: update.NodeID, Status: utils.Failed, Incarnation: update.Incarnation}
+				p.membership.AddRecentUpdate(failedUpdate)
+				log.Printf("[PINGACK][FAILED] FAILED: %s (from gossip)", update.NodeID)
+			}
+		}
+		p.membership.Unlock()
+		return
+	}
+
 	p.membership.Lock()
 	member, exists := p.membership.Members[memberKey]
 
 	if !exists {
+		// Don't add nodes with FAILED status, and don't re-add nodes from stale gossip
+		// If we don't know about this node, it might have left and we shouldn't re-add it
+		// based on stale ALIVE gossip
+		if update.Status == utils.Failed {
+			p.membership.Unlock()
+			return
+		}
+
 		newMember := &utils.Member{
 			ID:            update.NodeID,
 			Incarnation:   update.Incarnation,
@@ -343,37 +367,50 @@ func (p *PingAckManager) processUpdate(update utils.MemberUpdate, reporter utils
 		p.membership.Members[memberKey] = newMember
 		p.membership.AddRecentUpdate(newMember)
 		p.membership.Unlock()
-		return
-	} else {
-		if update.Incarnation > member.Incarnation {
-			member.Incarnation = update.Incarnation
-			member.Status = update.Status
-			if update.Status == utils.Alive {
-				member.LastHeartbeat = time.Now()
-				member.SuspicionStart = time.Time{}
-			} else if update.Status == utils.Suspected && p.enableSuspicion {
-				member.SuspicionStart = time.Now()
-			}
-			p.membership.AddRecentUpdate(member)
-		} else if update.Incarnation == member.Incarnation {
-			if update.Status == utils.Alive && member.Status == utils.Suspected {
-				member.Status = utils.Alive
-				member.LastHeartbeat = time.Now()
-				member.SuspicionStart = time.Time{}
-				p.membership.AddRecentUpdate(member)
-			} else if update.Status == utils.Suspected && member.Status == utils.Alive {
-				member.Status = utils.Suspected
-				member.SuspicionStart = time.Now()
-				p.membership.AddRecentUpdate(member)
-			}
+
+		// Don't clear suspicion for nodes we're just learning about
+		if update.Status == utils.Suspected && p.enableSuspicion {
+			p.suspicionMgr.ProcessSuspicion(reporter, update.NodeID, update.Incarnation)
 		}
+		return
+	}
+
+	// Member exists in our list - capture current incarnation
+	currentInc := member.Incarnation
+	shouldProcessSuspicion := false
+	shouldClearSuspicion := false
+
+	if update.Incarnation > currentInc {
+		// Higher incarnation always wins
+		member.Incarnation = update.Incarnation
+		member.Status = update.Status
+		if update.Status == utils.Alive {
+			member.LastHeartbeat = time.Now()
+			member.SuspicionStart = time.Time{}
+			shouldClearSuspicion = true
+		} else if update.Status == utils.Suspected && p.enableSuspicion {
+			member.SuspicionStart = time.Now()
+			shouldProcessSuspicion = true
+		}
+		p.membership.AddRecentUpdate(member)
+	} else if update.Incarnation == currentInc {
+		// Same incarnation - only some transitions are allowed
+		if update.Status == utils.Suspected && member.Status == utils.Alive {
+			// Alive -> Suspected is allowed
+			member.Status = utils.Suspected
+			member.SuspicionStart = time.Now()
+			p.membership.AddRecentUpdate(member)
+			shouldProcessSuspicion = true
+		}
+		// Do NOT allow Suspected -> Alive with same incarnation via gossip
+		// Only direct communication (PING/ACK/ALIVE msg) should clear suspicion
 	}
 	p.membership.Unlock()
 
-	if update.Status == utils.Suspected && p.enableSuspicion {
+	if shouldProcessSuspicion && p.enableSuspicion {
 		p.suspicionMgr.ProcessSuspicion(reporter, update.NodeID, update.Incarnation)
 	}
-	if update.Status == utils.Alive {
+	if shouldClearSuspicion {
 		p.suspicionMgr.ClearSuspect(update.NodeID, update.Incarnation)
 	}
 }
@@ -517,6 +554,7 @@ func (p *PingAckManager) handlePing(msg utils.Message, from *net.UDPAddr) {
 	p.membership.Lock()
 	senderKey := msg.Sender.String()
 	sender, exists := p.membership.Members[senderKey]
+	shouldClearSuspicion := false
 
 	if !exists {
 		newMember := &utils.Member{
@@ -527,6 +565,7 @@ func (p *PingAckManager) handlePing(msg utils.Message, from *net.UDPAddr) {
 		}
 		p.membership.Members[senderKey] = newMember
 		p.membership.AddRecentUpdate(newMember)
+		shouldClearSuspicion = true
 	} else {
 		updated := false
 		if msg.Incarnation > sender.Incarnation {
@@ -535,12 +574,14 @@ func (p *PingAckManager) handlePing(msg utils.Message, from *net.UDPAddr) {
 			sender.LastHeartbeat = time.Now()
 			sender.SuspicionStart = time.Time{}
 			updated = true
+			shouldClearSuspicion = true
 		} else if msg.Incarnation == sender.Incarnation {
 			sender.LastHeartbeat = time.Now()
 			if sender.Status == utils.Suspected {
 				sender.Status = utils.Alive
 				sender.SuspicionStart = time.Time{}
 				updated = true
+				shouldClearSuspicion = true
 			}
 		}
 		if updated {
@@ -551,6 +592,11 @@ func (p *PingAckManager) handlePing(msg utils.Message, from *net.UDPAddr) {
 	piggybacks := make([]utils.MemberUpdate, 0, len(msg.Members))
 	piggybacks = append(piggybacks, msg.Members...)
 	p.membership.Unlock()
+
+	// Only clear suspicion if we have direct evidence (direct communication)
+	if shouldClearSuspicion {
+		p.suspicionMgr.ClearSuspect(msg.Sender, msg.Incarnation)
+	}
 
 	for _, update := range piggybacks {
 		p.processUpdate(update, msg.Sender)
