@@ -279,24 +279,39 @@ func (p *PingAckManager) declareSuspicion(nodeID utils.NodeID) {
 		p.membership.Lock()
 		memberKey := nodeID.String()
 		member, exists := p.membership.Members[memberKey]
+
 		if !exists {
 			// Create an entry as suspected so the rest of the system can converge
-			member = &utils.Member{ID: nodeID, Status: utils.Suspected, LastHeartbeat: time.Now(), SuspicionStart: time.Now()}
+			member = &utils.Member{
+				ID:             nodeID,
+				Status:         utils.Suspected,
+				LastHeartbeat:  time.Now(),
+				SuspicionStart: time.Now(),
+			}
 			p.membership.Members[memberKey] = member
 			p.membership.AddRecentUpdate(member)
 		} else {
-			// Transition to suspected if not already
-			if member.Status != utils.Suspected {
+			// Only transition to suspected if currently alive
+			// If already suspected or failed, don't re-trigger suspicion
+			if member.Status == utils.Alive {
 				member.Status = utils.Suspected
 				member.SuspicionStart = time.Now()
 				p.membership.AddRecentUpdate(member)
+				p.membership.Unlock()
+
+				// Report our suspicion outside the lock
+				p.suspicionMgr.ProcessSuspicion(p.membership.LocalNode, nodeID, member.Incarnation)
+				log.Printf("[PINGACK][SUSPECT] SUSPECT: %s (no ACKs)", nodeID)
+				return
+			} else if member.Status == utils.Suspected {
+				// Already suspected - just refresh the suspicion start time if it's been a while
+				if time.Since(member.SuspicionStart) > p.timeouts.SuspicionTimeout/2 {
+					member.SuspicionStart = time.Now()
+					log.Printf("[PINGACK][INFO] INFO: Refreshing suspicion for %s", nodeID)
+				}
 			}
 		}
 		p.membership.Unlock()
-
-		// Report our suspicion
-		p.suspicionMgr.ProcessSuspicion(p.membership.LocalNode, nodeID, member.Incarnation)
-		log.Printf("[PINGACK][SUSPECT] SUSPECT: %s (no ACKs)", nodeID)
 		return
 	}
 
@@ -395,8 +410,8 @@ func (p *PingAckManager) failureDetectionLoop() {
 
 // cleanupLoop trims any long-lived waiter state so memory doesn't leak.
 func (p *PingAckManager) cleanupLoop() {
-	// Cleanup orphaned entries every 5 seconds
-	ticker := time.NewTicker(5 * time.Second)
+	// Cleanup orphaned entries every 10 seconds (less aggressive)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -417,8 +432,8 @@ func (p *PingAckManager) cleanupOrphanedEntries() {
 	var toCleanup []string
 
 	p.mu.Lock()
-	// Collect entries that are older than 2 * AckTimeout (should be enough for any reasonable operation)
-	maxAge := 2 * p.timeouts.AckTimeout
+	// Collect entries that are older than 4 * AckTimeout (more conservative)
+	maxAge := 4 * p.timeouts.AckTimeout
 
 	for key, waiter := range p.pendingIndirect {
 		select {
@@ -430,6 +445,13 @@ func (p *PingAckManager) cleanupOrphanedEntries() {
 			if now.Sub(waiter.createdTime) > maxAge {
 				toCleanup = append(toCleanup, key)
 			}
+		}
+	}
+
+	// Also clean up very old pending acks (safety measure)
+	for seqNum, pending := range p.pendingAcks {
+		if now.Sub(pending.startTime) > 2*p.timeouts.ProtocolPeriod {
+			delete(p.pendingAcks, seqNum)
 		}
 	}
 

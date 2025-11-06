@@ -50,7 +50,7 @@ func (s *Server) Stop() {
 
 // backgroundTasks periodically updates the ring and checks for re-replication
 func (s *Server) backgroundTasks() {
-	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+	ticker := time.NewTicker(10 * time.Second) // Reduced frequency: check every 10 seconds
 	defer ticker.Stop()
 
 	for {
@@ -65,6 +65,8 @@ func (s *Server) backgroundTasks() {
 			if currentCount > s.lastMemberCount {
 				log.Printf("[HyDFS] Membership increased from %d to %d nodes, triggering rebalancing",
 					s.lastMemberCount, currentCount)
+				// Add delay before re-replication to let membership stabilize
+				time.Sleep(2 * time.Second)
 				go s.TriggerReReplication("node join detected")
 			}
 			s.lastMemberCount = currentCount
@@ -292,13 +294,13 @@ func (s *Server) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'hydfsfile' form value", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Extract client identity (IP:Port from remote address)
 	clientID := r.RemoteAddr
 	if clientID == "" {
 		clientID = "unknown_client"
 	}
-	
+
 	fileID := s.getFileID(hydfsFilename)
 	log.Printf("[HyDFS] Received /create for %s (ID: %s) from client %s", hydfsFilename, fileID, clientID)
 
@@ -367,13 +369,13 @@ func (s *Server) HandleAppend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'hydfsfile' form value", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Extract client identity (IP:Port from remote address)
 	clientID := r.RemoteAddr
 	if clientID == "" {
 		clientID = "unknown_client"
 	}
-	
+
 	fileID := s.getFileID(hydfsFilename)
 	log.Printf("[HyDFS] Received /append for %s (ID: %s) from client %s", hydfsFilename, fileID, clientID)
 
@@ -660,7 +662,7 @@ func (s *Server) HandleInternalWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid blockinfo JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	log.Printf("[HyDFS-Replica] RECEIVED write request for file %s (block: %s)", meta.Filename, blockInfo.BlockID)
 
 	// 1. Write the block data
@@ -955,40 +957,40 @@ func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, gold
 		wg.Add(1)
 		go func(node utils.NodeID) {
 			defer wg.Done()
-			
+
 			// Step 1: Get current metadata from this replica
 			metaURL := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
 			metaResp, err := s.Client.Get(metaURL)
-			
+
 			var replicaMeta Metadata
 			if err == nil && metaResp.StatusCode == http.StatusOK {
 				json.NewDecoder(metaResp.Body).Decode(&replicaMeta)
 				metaResp.Body.Close()
 			}
-			
+
 			// Step 2: Identify missing blocks
 			replicaBlockIDs := make(map[string]bool)
 			for _, block := range replicaMeta.Blocks {
 				replicaBlockIDs[block.BlockID] = true
 			}
-			
+
 			missingBlocks := make([]BlockInfo, 0)
 			for _, block := range goldenMeta.Blocks {
 				if !replicaBlockIDs[block.BlockID] {
 					missingBlocks = append(missingBlocks, block)
 				}
 			}
-			
+
 			// Step 3: Replicate missing blocks from self or other replicas
 			if len(missingBlocks) > 0 {
-				log.Printf("[HyDFS-Coord] Replicating %d missing blocks to %s for file %s", 
+				log.Printf("[HyDFS-Coord] Replicating %d missing blocks to %s for file %s",
 					len(missingBlocks), node.Address(), fileID)
-				
+
 				for _, block := range missingBlocks {
 					// Try to fetch block from local storage first
 					blockFile, err := s.store.ReadBlock(fileID, block.BlockID)
 					var blockData []byte
-					
+
 					if err == nil {
 						blockData, _ = io.ReadAll(blockFile)
 						blockFile.Close()
@@ -998,7 +1000,7 @@ func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, gold
 							if sourceReplica.String() == node.String() {
 								continue
 							}
-							blockURL := s.buildReplicaURL(sourceReplica, 
+							blockURL := s.buildReplicaURL(sourceReplica,
 								fmt.Sprintf("/internal/get-block?fileid=%s&blockid=%s", fileID, block.BlockID))
 							blockResp, blockErr := s.Client.Get(blockURL)
 							if blockErr == nil && blockResp.StatusCode == http.StatusOK {
@@ -1011,12 +1013,12 @@ func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, gold
 							}
 						}
 					}
-					
+
 					if blockData == nil {
 						log.Printf("[HyDFS-Coord] Could not find block %s to replicate", block.BlockID)
 						continue
 					}
-					
+
 					// Write block to target replica
 					body := &bytes.Buffer{}
 					writer := multipart.NewWriter(body)
@@ -1025,20 +1027,20 @@ func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, gold
 					writer.WriteField("metadata", string(metaBytes))
 					blockInfoBytes, _ := json.Marshal(block)
 					writer.WriteField("blockinfo", string(blockInfoBytes))
-					
+
 					part, _ := writer.CreateFormFile("blockdata", block.BlockID)
 					part.Write(blockData)
 					writer.Close()
-					
+
 					writeURL := s.buildReplicaURL(node, "/internal/write")
 					req, _ := http.NewRequest(http.MethodPost, writeURL, body)
 					req.Header.Set("Content-Type", writer.FormDataContentType())
-					
+
 					resp, err := s.Client.Do(req)
 					if err == nil && resp.StatusCode == http.StatusOK {
 						resp.Body.Close()
 					} else {
-						log.Printf("[HyDFS-Coord] Failed to replicate block %s to %s: %v", 
+						log.Printf("[HyDFS-Coord] Failed to replicate block %s to %s: %v",
 							block.BlockID, node.Address(), err)
 						if resp != nil {
 							resp.Body.Close()
@@ -1046,7 +1048,7 @@ func (s *Server) dispatchWriteMetas(replicas []utils.NodeID, fileID string, gold
 					}
 				}
 			}
-			
+
 			// Step 4: Update metadata
 			metaBytes, _ := json.Marshal(goldenMeta)
 			writeMetaURL := s.buildReplicaURL(node, fmt.Sprintf("/internal/write-meta?fileid=%s", fileID))

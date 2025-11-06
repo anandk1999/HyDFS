@@ -24,12 +24,14 @@ func GetLocalIP() string {
 
 // NetworkLayer wraps our UDP socket plus message dispatch helpers.
 type NetworkLayer struct {
-	conn         *net.UDPConn
-	dropRate     float32
-	messageQueue chan ReceivedMessage
-	handlers     map[MessageType]func(Message, *net.UDPAddr)
-	closed       chan bool
-	mutex        sync.RWMutex
+	conn            *net.UDPConn
+	dropRate        float32
+	messageQueue    chan ReceivedMessage
+	priorityQueue   chan ReceivedMessage // High-priority queue for membership messages
+	handlers        map[MessageType]func(Message, *net.UDPAddr)
+	closed          chan bool
+	mutex           sync.RWMutex
+	sendRateLimiter chan struct{} // Rate limiting for sends
 }
 
 // ReceivedMessage keeps the decoded payload along with who sent it.
@@ -40,11 +42,19 @@ type ReceivedMessage struct {
 
 // NewNetworkLayer sets up queues and sane defaults.
 func NewNetworkLayer() *NetworkLayer {
+	// Rate limiter: allow up to 100 concurrent sends
+	rateLimiter := make(chan struct{}, 100)
+	for i := 0; i < 100; i++ {
+		rateLimiter <- struct{}{}
+	}
+
 	return &NetworkLayer{
-		dropRate:     0.0,
-		messageQueue: make(chan ReceivedMessage, 1000),
-		handlers:     make(map[MessageType]func(Message, *net.UDPAddr)),
-		closed:       make(chan bool),
+		dropRate:        0.0,
+		messageQueue:    make(chan ReceivedMessage, 5000), // Increased buffer for DFS traffic
+		priorityQueue:   make(chan ReceivedMessage, 1000), // Priority queue for membership
+		handlers:        make(map[MessageType]func(Message, *net.UDPAddr)),
+		closed:          make(chan bool),
+		sendRateLimiter: rateLimiter,
 	}
 }
 
@@ -63,10 +73,12 @@ func (n *NetworkLayer) Start(port int) error {
 	}
 
 	n.conn = conn
-	n.conn.SetReadBuffer(1048576) // 1MB buffer
+	n.conn.SetReadBuffer(2097152)  // 2MB buffer (increased for DFS traffic)
+	n.conn.SetWriteBuffer(2097152) // 2MB write buffer
 
 	go n.receiveLoop()
 	go n.processQueue()
+	go n.processPriorityQueue() // Separate goroutine for priority messages
 
 	return nil
 }
@@ -107,10 +119,31 @@ func (n *NetworkLayer) receiveLoop() {
 				continue
 			}
 
-			select {
-			case n.messageQueue <- ReceivedMessage{Message: msg, From: addr}:
-			default:
-				log.Println("Message queue full, dropping message")
+			// Route membership protocol messages to priority queue
+			isPriorityMsg := msg.Type == Ping || msg.Type == Ack ||
+				msg.Type == IndirectPing || msg.Type == IndirectAck ||
+				msg.Type == Join || msg.Type == JoinResponse ||
+				msg.Type == AliveMsg || msg.Type == Suspect ||
+				msg.Type == Leave || msg.Type == Confirm
+
+			if isPriorityMsg {
+				select {
+				case n.priorityQueue <- ReceivedMessage{Message: msg, From: addr}:
+				default:
+					// Priority queue full, log but don't drop membership messages
+					log.Println("Priority queue full, using regular queue for membership message")
+					select {
+					case n.messageQueue <- ReceivedMessage{Message: msg, From: addr}:
+					default:
+						log.Println("All queues full, dropping message")
+					}
+				}
+			} else {
+				select {
+				case n.messageQueue <- ReceivedMessage{Message: msg, From: addr}:
+				default:
+					log.Println("Message queue full, dropping DFS message")
+				}
 			}
 		}
 	}
@@ -134,7 +167,25 @@ func (n *NetworkLayer) processQueue() {
 	}
 }
 
-// Send encodes the message and blasts it over UDP.
+// processPriorityQueue handles high-priority membership protocol messages
+func (n *NetworkLayer) processPriorityQueue() {
+	for {
+		select {
+		case <-n.closed:
+			return
+		case received := <-n.priorityQueue:
+			n.mutex.RLock()
+			handler, exists := n.handlers[received.Message.Type]
+			n.mutex.RUnlock()
+
+			if exists {
+				handler(received.Message, received.From)
+			}
+		}
+	}
+}
+
+// Send encodes the message and blasts it over UDP with rate limiting.
 func (n *NetworkLayer) Send(msg Message, target string) error {
 	msg.Timestamp = time.Now().Unix()
 
@@ -144,13 +195,35 @@ func (n *NetworkLayer) Send(msg Message, target string) error {
 		return err
 	}
 
+	// Rate limiting: wait for token with timeout
+	select {
+	case <-n.sendRateLimiter:
+		// Got token, proceed with send
+		defer func() {
+			// Return token after a small delay to prevent bursts
+			time.AfterFunc(10*time.Millisecond, func() {
+				select {
+				case n.sendRateLimiter <- struct{}{}:
+				default:
+				}
+			})
+		}()
+	case <-time.After(100 * time.Millisecond):
+		// Timeout waiting for rate limiter - send anyway but log
+		log.Printf("Rate limiter timeout for message type %v to %s", msg.Type, target)
+	}
+
 	addr, err := net.ResolveUDPAddr("udp", target)
 	if err != nil {
 		log.Printf("Error resolving address %s: %v", target, err)
 		return err
 	}
 
+	// Set write deadline to prevent blocking forever
+	n.conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
 	_, err = n.conn.WriteToUDP(data, addr)
+	n.conn.SetWriteDeadline(time.Time{}) // Clear deadline
+
 	if err != nil {
 		log.Printf("Error sending UDP message to %s: %v", target, err)
 	}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // checkForReReplication monitors files stored locally and ensures they maintain N=3 replicas
@@ -46,7 +47,12 @@ func (s *Server) performReReplication(reason string) {
 	// Only check rebalancing on explicit topology changes, not on routine background scans
 	shouldRebalance := reason != "background"
 
-	for _, fileID := range fileIDs {
+	for i, fileID := range fileIDs {
+		// Add throttling between file re-replications to reduce network load
+		if i > 0 && i%5 == 0 {
+			time.Sleep(500 * time.Millisecond) // Brief pause every 5 files
+		}
+
 		meta, err := s.store.ReadMetadata(fileID)
 		if err != nil {
 			continue
@@ -70,6 +76,9 @@ func (s *Server) findCurrentReplicasForFile(fileID string) []utils.NodeID {
 	var wg sync.WaitGroup
 	replicaChan := make(chan utils.NodeID, len(members))
 
+	// Limit concurrent replica checks to avoid network flooding
+	semaphore := make(chan struct{}, 5) // Max 5 concurrent checks
+
 	for _, member := range members {
 		if member.Status != utils.Alive {
 			continue
@@ -77,6 +86,11 @@ func (s *Server) findCurrentReplicasForFile(fileID string) []utils.NodeID {
 		wg.Add(1)
 		go func(node utils.NodeID) {
 			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
 			url := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
 			resp, err := s.Client.Get(url)
 			if err == nil && resp.StatusCode == http.StatusOK {
@@ -247,13 +261,13 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 // and redistributes if necessary (e.g., after node joins)
 func (s *Server) checkAndRebalance(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
 	filename := s.resolveFilename(meta)
-	
+
 	// Refresh metadata from quorum to ensure we replicate the latest version
 	freshMetas := s.performGetMetadata(currentReplicas, fileID)
 	if len(freshMetas) > 0 {
 		meta = s.findWinningMetadata(freshMetas)
 	}
-	
+
 	desiredReplicas := s.ring.GetSuccessors(filename, 3)
 
 	if len(desiredReplicas) == 0 {

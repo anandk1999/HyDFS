@@ -150,17 +150,18 @@ func DefaultTimeoutConfig() TimeoutConfig {
 }
 
 // OptimalTimeoutConfig returns optimized parameters for fast convergence
+// Updated for real-world network conditions with DFS traffic
 func OptimalTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
-		FailureTimeout:   3 * time.Second,         // Faster failure detection
-		CleanupTimeout:   3 * time.Second,         // Quicker cleanup
-		SuspicionTimeout: 1500 * time.Millisecond, // Balanced suspicion time
+		FailureTimeout:   5 * time.Second, // Increased for network variability
+		CleanupTimeout:   3 * time.Second, // Quicker cleanup
+		SuspicionTimeout: 4 * time.Second, // Longer to avoid oscillation with DFS traffic
 
-		GossipPeriod:   500 * time.Millisecond, // More frequent gossip
-		ProtocolPeriod: 500 * time.Millisecond, // Faster SWIM cycles
-		AckTimeout:     150 * time.Millisecond, // Quicker ACK timeout
+		GossipPeriod:   1 * time.Second,        // Reduced frequency to lower network load
+		ProtocolPeriod: 1 * time.Second,        // Standard SWIM period for stability
+		AckTimeout:     500 * time.Millisecond, // Realistic timeout for real networks
 
-		CheckInterval: 100 * time.Millisecond, // More frequent checks
+		CheckInterval: 500 * time.Millisecond, // Less aggressive checking
 	}
 }
 
