@@ -218,9 +218,14 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 		metaBytes, _ := json.Marshal(meta)
 		blockInfoBytes, _ := json.Marshal(block)
 
-		// Send block to each target node
+		// Send block to each target node with throttling between sends
 		var wg sync.WaitGroup
-		for _, targetNode := range targetNodes {
+		for idx, targetNode := range targetNodes {
+			// Add small delay between replica sends to avoid network bursts
+			if idx > 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
+
 			wg.Add(1)
 			go func(node utils.NodeID, data []byte) {
 				defer wg.Done()

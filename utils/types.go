@@ -153,9 +153,9 @@ func DefaultTimeoutConfig() TimeoutConfig {
 // Updated for real-world network conditions with DFS traffic
 func OptimalTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
-		FailureTimeout:   5 * time.Second, // Increased for network variability
+		FailureTimeout:   8 * time.Second, // Increased for network variability
 		CleanupTimeout:   3 * time.Second, // Quicker cleanup
-		SuspicionTimeout: 4 * time.Second, // Longer to avoid oscillation with DFS traffic
+		SuspicionTimeout: 6 * time.Second, // Increased to match suspicion manager (prevents oscillation)
 
 		GossipPeriod:   1 * time.Second,        // Reduced frequency to lower network load
 		ProtocolPeriod: 1 * time.Second,        // Standard SWIM period for stability

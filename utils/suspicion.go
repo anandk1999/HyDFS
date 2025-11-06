@@ -27,6 +27,8 @@ type suspectEntry struct {
 	confirmed    bool
 	confirmedAt  time.Time
 	cleanupAfter time.Time
+	lastCleared  time.Time // Track when suspicion was last cleared
+	clearCount   int       // Count how many times we've cleared this node
 }
 
 // SuspicionManager keeps tabs on suspects and decides when to escalate.
@@ -106,16 +108,39 @@ func (sm *SuspicionManager) ProcessSuspicion(reporter NodeID, target NodeID, inc
 
 	sm.mu.Lock()
 	e, ok := sm.entries[key]
+
+	// DAMPENING: If we recently cleared this node, don't immediately re-suspect it
+	// This prevents oscillation during network congestion
+	if ok && !e.lastCleared.IsZero() {
+		timeSinceCleared := now.Sub(e.lastCleared)
+		// Exponential backoff: 2s, 4s, 8s based on how many times we've cleared
+		dampenDuration := time.Duration(2<<uint(e.clearCount)) * time.Second
+		if dampenDuration > 16*time.Second {
+			dampenDuration = 16 * time.Second // Cap at 16 seconds
+		}
+
+		if timeSinceCleared < dampenDuration {
+			sm.mu.Unlock()
+			// Silently ignore suspicion reports during dampening period
+			return
+		}
+	}
+
 	if ok {
 		if inc < e.incarnation {
 			sm.mu.Unlock()
 			return
 		}
 		if inc > e.incarnation {
+			// Preserve clear history for new incarnation
+			lastCleared := e.lastCleared
+			clearCount := e.clearCount
 			e = &suspectEntry{
 				target:      target,
 				incarnation: inc,
 				reporters:   make(map[NodeID]time.Time),
+				lastCleared: lastCleared,
+				clearCount:  clearCount,
 			}
 			sm.entries[key] = e
 		}
@@ -171,6 +196,7 @@ func (sm *SuspicionManager) ProcessSuspicion(reporter NodeID, target NodeID, inc
 
 // ClearSuspect drops suspicion state if we hear the target is alive again.
 func (sm *SuspicionManager) ClearSuspect(target NodeID, inc int32) {
+	now := time.Now()
 	key := target.String()
 
 	sm.mu.Lock()
@@ -192,7 +218,17 @@ func (sm *SuspicionManager) ClearSuspect(target NodeID, inc int32) {
 		sm.mu.Unlock()
 		return
 	}
-	delete(sm.entries, key)
+
+	// Track clearing for dampening
+	e.lastCleared = now
+	e.clearCount++
+
+	// Don't delete the entry immediately - keep it for dampening
+	// Reset the suspicion state but preserve the clear history
+	e.firstReport = time.Time{}
+	e.reporters = make(map[NodeID]time.Time)
+	e.confirmed = false
+
 	sm.mu.Unlock()
 
 	sm.membership.Lock()
@@ -220,6 +256,12 @@ func (sm *SuspicionManager) handleSelfRefutation(incomingInc int32) {
 		newInc = localInc + 1
 	}
 	sm.membership.Incarnation = newInc
+
+	// Update local member status immediately
+	if localMember, ok := sm.membership.Members[sm.membership.LocalNode.String()]; ok {
+		localMember.Incarnation = newInc
+		localMember.Status = Alive
+	}
 	sm.membership.Unlock()
 
 	msg := Message{
@@ -238,8 +280,14 @@ func (sm *SuspicionManager) handleSelfRefutation(incomingInc int32) {
 	}
 	sm.membership.Unlock()
 
-	for _, addr := range recipients {
-		sm.network.Send(msg, addr)
+	// Send ALIVE message multiple times to ensure delivery during congestion
+	for retry := 0; retry < 3; retry++ {
+		for _, addr := range recipients {
+			sm.network.Send(msg, addr)
+		}
+		if retry < 2 {
+			time.Sleep(50 * time.Millisecond) // Brief delay between retries
+		}
 	}
 }
 
