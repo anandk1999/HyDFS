@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # ==============================================================================
 # HyDFS Cluster Management Script for CS425 VMs
@@ -22,6 +22,8 @@
 #                      e.g., ./cluster.sh cmd 3 create local.txt dfs_file.txt
 #   logs <pattern>     Remotely greps logs on all VMs for the given pattern.
 #                      e.g., ./cluster.sh logs "SUSPECT|FAILED"
+#   leave <vm>         Makes a specific VM gracefully leave the cluster.
+#                      e.g., ./cluster.sh leave 3
 #   rejoin <vm>        Rejoins a specific VM to the cluster (kills old process, clears storage).
 #                      e.g., ./cluster.sh rejoin 3
 #
@@ -41,7 +43,7 @@ else
 fi
 PROJECT_DIR_NAME="mp3-g02" # Assumes this is the name of your repo's directory
 BINARY_NAME="client"
-HOSTS_FILE="../hosts.txt"
+HOSTS_FILE="${SCRIPT_DIR}/../hosts.txt"
 
 # Ensure hosts file exists
 if [ ! -f "$HOSTS_FILE" ]; then
@@ -133,22 +135,26 @@ case "$COMMAND" in
         echo -e "${GREEN}All daemons started.${NC}"
         ;;
     stop)
-        run_on_all "pkill -f ./${BINARY_NAME} || echo 'No process found to kill.'"
+    run_on_all "pkill -f '${PROJECT_DIR_NAME}/${BINARY_NAME}' || echo 'No process found to kill.'"
         ;;
     clean)
         echo -e "${RED}WARNING: This will stop all nodes and delete ALL logs and storage data.${NC}"
-        # zsh-compatible read (use -k instead of -n, and -r for raw input)
-        read -k 1 "REPLY?Are you sure? (y/N) "
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            run_on_all "
-                pkill -f ./${BINARY_NAME} || true;
-                rm -rf ${PROJECT_DIR_NAME}/logs;
-                rm -f ${PROJECT_DIR_NAME}/node.log;
-                rm -rf ${PROJECT_DIR_NAME}/hydfs_storage;
-            "
+        if read -k 1 "REPLY?Are you sure? (y/N) "; then
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo "Stopping all daemons..."
+                run_on_all "pkill -9 -f '${PROJECT_DIR_NAME}/${BINARY_NAME}' || true"
+                
+                echo "Waiting for processes to terminate..."
+                sleep 2
+
+                echo "Deleting storage and logs on all VMs..."
+                run_on_all "cd \${HOME}/${PROJECT_DIR_NAME} && rm -rfv hydfs_storage logs node.log"
+            else
+                echo "Clean cancelled."
+            fi
         else
-            echo "Clean cancelled."
+             echo "\nClean cancelled."
         fi
         ;;
     cmd)
@@ -186,6 +192,29 @@ case "$COMMAND" in
         PATTERN=$1
         run_on_all "cd ${PROJECT_DIR_NAME} && grep -H \"${PATTERN}\" node.log"
         ;;
+    leave)
+        if [ -z "$1" ]; then
+            echo -e "${RED}Error: 'leave' requires a VM index (1-10).${NC}"
+            exit 1
+        fi
+        VM_INDEX=$1
+
+        if [ "${VM_INDEX}" -lt 1 ] || [ "${VM_INDEX}" -gt "${NUM_VMS}" ]; then
+            echo -e "${RED}Error: Invalid VM index. Must be between 1 and ${NUM_VMS}.${NC}"
+            exit 1
+        fi
+
+    TARGET_HOST=$(sed -n "${VM_INDEX}p" "${HOSTS_FILE}")
+        echo -e "${YELLOW}Making node ${VM_INDEX} (${TARGET_HOST}) leave the cluster...${NC}"
+
+        # Execute leave command via client
+        ssh "${REMOTE_USER}@${TARGET_HOST}" "
+            cd ${PROJECT_DIR_NAME} &&
+            ./${BINARY_NAME} -cmd leave
+        "
+        
+        echo -e "${GREEN}Node ${VM_INDEX} has left the cluster.${NC}"
+        ;;
     rejoin)
         if [ -z "$1" ]; then
             echo -e "${RED}Error: 'rejoin' requires a VM index (1-10).${NC}"
@@ -203,7 +232,7 @@ case "$COMMAND" in
         INTRODUCER_IP=$(ssh "${REMOTE_USER}@${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
         INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
 
-        TARGET_HOST=$(sed -n "${VM_INDEX}p" ../hosts.txt)
+    TARGET_HOST=$(sed -n "${VM_INDEX}p" "${HOSTS_FILE}")
         port=$((8080 + VM_INDEX - 1))
         cport=$((18080))
 
@@ -212,18 +241,33 @@ case "$COMMAND" in
         echo "Node will use ports ${port}/${cport}"
 
         ssh "${REMOTE_USER}@${TARGET_HOST}" "
-            cd ${PROJECT_DIR_NAME} &&
-            pkill -f './${BINARY_NAME}' || true &&
-            sleep 1 &&
-            rm -rf hydfs_storage &&
-            go build -o ${BINARY_NAME} . &&
+            set -e
+            cd ${PROJECT_DIR_NAME}
+
+            # Find and kill the specific process listening on the control port
+            PID_TO_KILL=\$(lsof -t -i:${cport} -sTCP:LISTEN)
+            if [ -n \"\$PID_TO_KILL\" ]; then
+                echo 'Found old daemon process \$PID_TO_KILL, killing it...'
+                kill -9 \$PID_TO_KILL || true
+                sleep 1
+            else
+                echo 'No old daemon process found running.'
+            fi
+
+            echo 'Cleaning up old storage...'
+            rm -rf hydfs_storage
+
+            echo 'Rebuilding binary...'
+            go build -o ${BINARY_NAME} .
+
+            echo 'Starting new daemon...'
             nohup ./${BINARY_NAME} -port ${port} -control-port ${cport} -introducer ${INTRODUCER_ADDR} > node.log 2>&1 &
         "
         
-        echo -e "${GREEN}Node ${VM_INDEX} rejoined. Check logs with: ./cluster.sh logs 'Joined the group'${NC}"
+        echo -e "${GREEN}Node ${VM_INDEX} rejoin command sent. Check logs with: ./cluster.sh logs 'Joined the group'${NC}"
         ;;
     *)
-        echo "Usage: $0 {setup|pull|build|start|stop|clean|cmd|logs|rejoin} [args...]"
+        echo "Usage: $0 {setup|pull|build|start|stop|clean|cmd|logs|leave|rejoin} [args...]"
         exit 1
         ;;
 esac
