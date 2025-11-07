@@ -761,6 +761,11 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 	}
 	p.membership.Lock()
 
+	// Check if this is a rejoining node (was Failed or not in membership)
+	joinerKey := msg.Sender.String()
+	existingMember := p.membership.Members[joinerKey]
+	isRejoiningAfterFailure := existingMember == nil || existingMember.Status == utils.Failed
+
 	// Check for and remove any old entries with the same IP:Port but different timestamp
 	joinerAddress := msg.Sender.Address()
 	var oldEntriesToRemove []string
@@ -803,8 +808,9 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 	}
 	p.membership.Unlock()
 
-	// Clear dampening state for rejoining node to allow normal operation
-	if p.suspicionMgr != nil {
+	// Clear dampening ONLY if this is a node rejoining after failure
+	// This allows clean rejoin while preserving oscillation prevention for alive nodes
+	if isRejoiningAfterFailure && p.suspicionMgr != nil {
 		p.suspicionMgr.ClearDampeningState(msg.Sender)
 	}
 
