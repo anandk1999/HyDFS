@@ -50,7 +50,7 @@ func (s *Server) Stop() {
 
 // backgroundTasks periodically updates the ring and checks for re-replication
 func (s *Server) backgroundTasks() {
-	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds for responsiveness
+	ticker := time.NewTicker(2 * time.Second) // Faster cadence keeps membership and replicas fresh
 	defer ticker.Stop()
 
 	for {
@@ -65,10 +65,15 @@ func (s *Server) backgroundTasks() {
 			if currentCount > s.lastMemberCount {
 				log.Printf("[HyDFS] Membership increased from %d to %d nodes, triggering rebalancing",
 					s.lastMemberCount, currentCount)
-				// DISABLED: Don't trigger immediate re-replication on joins
-				// Let the periodic background check handle it naturally
-				// This prevents flooding when nodes rejoin during recovery
-				// go s.TriggerReReplication("node join detected")
+				// Avoid spamming re-replication if several joins arrive in quick succession
+				s.Lock()
+				if time.Since(s.lastJoinTrigger) > 1*time.Second {
+					s.lastJoinTrigger = time.Now()
+					s.Unlock()
+					go s.TriggerReReplication("membership increase")
+				} else {
+					s.Unlock()
+				}
 			}
 			s.lastMemberCount = currentCount
 

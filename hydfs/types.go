@@ -4,6 +4,7 @@ import (
 	"mp3-g02/utils"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // Config holds configuration for the HyDFS server
@@ -44,6 +45,7 @@ type Server struct {
 	ControlPort     int          // The port number for the control server
 	replState       int32        // tracks if a re-replication pass is in-flight
 	lastMemberCount int          // tracks membership size to detect joins
+	lastJoinTrigger time.Time    // last time we triggered re-replication due to a join
 }
 
 // Internal (node-to-node) request payloads

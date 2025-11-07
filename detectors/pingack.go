@@ -798,6 +798,8 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 	p.membership.Members[memberKey] = newMember
 
 	members := make([]utils.MemberUpdate, 0, len(p.membership.Members))
+	announceAddrs := make([]string, 0, len(p.membership.Members))
+	localID := p.membership.LocalNode.String()
 	for _, member := range p.membership.Members {
 		members = append(members, utils.MemberUpdate{
 			NodeID:      member.ID,
@@ -805,6 +807,10 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 			Status:      member.Status,
 			Timestamp:   time.Now(),
 		})
+		memberKey := member.ID.String()
+		if memberKey != msg.Sender.String() && memberKey != localID {
+			announceAddrs = append(announceAddrs, member.ID.Address())
+		}
 	}
 	p.membership.Unlock()
 
@@ -819,6 +825,19 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 		p.membership.AddRecentUpdateSafe(failedUpdate)
 	}
 	p.membership.AddRecentUpdateSafe(newMember)
+
+	// Broadcast an ALIVE announcement so peers learn about the join immediately
+	aliveAnnouncement := utils.Message{
+		Type:        utils.AliveMsg,
+		Sender:      msg.Sender,
+		Incarnation: msg.Incarnation,
+	}
+	for _, addr := range announceAddrs {
+		if addr == msg.Sender.Address() {
+			continue
+		}
+		_ = p.network.Send(aliveAnnouncement, addr)
+	}
 
 	response := utils.Message{
 		Type:        utils.JoinResponse,
@@ -894,9 +913,20 @@ func (p *PingAckManager) handleAliveMessage(msg utils.Message, from *net.UDPAddr
 	p.membership.Lock()
 	memberKey := msg.Sender.String()
 	member, exists := p.membership.Members[memberKey]
+	added := false
 
-	if exists && msg.Incarnation >= member.Incarnation {
-		if member.Status != utils.Alive || msg.Incarnation > member.Incarnation {
+	if !exists {
+		member = &utils.Member{
+			ID:            msg.Sender,
+			Incarnation:   msg.Incarnation,
+			Status:        utils.Alive,
+			LastHeartbeat: time.Now(),
+		}
+		p.membership.Members[memberKey] = member
+		p.membership.AddRecentUpdate(member)
+		added = true
+	} else if msg.Incarnation >= member.Incarnation {
+		if msg.Incarnation > member.Incarnation || member.Status != utils.Alive {
 			member.Incarnation = msg.Incarnation
 			member.Status = utils.Alive
 			member.LastHeartbeat = time.Now()
@@ -906,8 +936,12 @@ func (p *PingAckManager) handleAliveMessage(msg utils.Message, from *net.UDPAddr
 	}
 	p.membership.Unlock()
 
-	p.suspicionMgr.ClearSuspect(msg.Sender, msg.Incarnation)
-	if exists {
+	if p.suspicionMgr != nil {
+		p.suspicionMgr.ClearSuspect(msg.Sender, msg.Incarnation)
+	}
+	if added {
+		log.Printf("[PINGACK][JOIN] ALIVE: Added %s to membership (incarnation %d)", msg.Sender, msg.Incarnation)
+	} else if exists {
 		log.Printf("[PINGACK][CLEARED] CLEARED: %s (incarnation %d)", msg.Sender, msg.Incarnation)
 	}
 }
