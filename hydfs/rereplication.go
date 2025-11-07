@@ -50,8 +50,9 @@ func (s *Server) performReReplication(reason string) {
 		return
 	}
 
-	// Only check rebalancing on explicit topology changes, not on routine background scans
-	shouldRebalance := reason != "background"
+	// NEVER rebalance automatically - only maintain N=3 replicas
+	// Rebalancing should only happen on explicit administrator action (not implemented)
+	// This prevents cascading copies when nodes leave/fail
 
 	for i, fileID := range fileIDs {
 		// Add more aggressive throttling between file re-replications
@@ -72,13 +73,17 @@ func (s *Server) performReReplication(reason string) {
 
 		currentReplicas := s.findCurrentReplicasForFile(fileID)
 
+		// ONLY maintain N=3 replicas - do NOT rebalance to new ring successors
+		// This prevents replica proliferation when nodes leave
 		if len(currentReplicas) < 3 {
 			log.Printf("[ReReplication] File %s replicas below quorum (%d/3), reason=%s", fileID, len(currentReplicas), reason)
 			s.reReplicateFile(fileID, meta, currentReplicas)
-		} else if shouldRebalance {
-			// Only rebalance when explicitly triggered by topology change (join/failure/recovery)
-			s.checkAndRebalance(fileID, meta, currentReplicas)
+		} else if len(currentReplicas) > 3 {
+			// If we somehow have MORE than 3 replicas, clean up excess
+			log.Printf("[ReReplication] File %s has EXCESS replicas (%d/3), cleaning up", fileID, len(currentReplicas))
+			s.cleanupExcessReplicas(fileID, meta, currentReplicas)
 		}
+		// Note: If len(currentReplicas) == 3, do nothing - system is healthy
 	}
 }
 
@@ -188,15 +193,25 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 		currentReplicaMap[node.String()] = true
 	}
 
-	targetNodes := make([]utils.NodeID, 0)
+	// Calculate how many MORE replicas we need to reach N=3
+	needed := 3 - len(currentReplicas)
+	if needed <= 0 {
+		return // Already have enough
+	}
+
+	// Find available nodes from ring successors that don't already have the file
+	targetNodes := make([]utils.NodeID, 0, needed)
 	for _, desired := range desiredReplicas {
 		if !currentReplicaMap[desired.String()] {
 			targetNodes = append(targetNodes, desired)
+			if len(targetNodes) >= needed {
+				break // Stop once we have enough target nodes
+			}
 		}
 	}
 
 	if len(targetNodes) == 0 {
-		log.Printf("[ReReplication] File %s already present on desired successors", fileID)
+		log.Printf("[ReReplication] File %s: no available nodes to replicate to", fileID)
 		return
 	}
 
@@ -276,6 +291,49 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 	}
 
 	log.Printf("[ReReplication] Completed re-replication of file %s to %d new nodes", fileID, len(targetNodes))
+}
+
+// cleanupExcessReplicas removes replicas beyond N=3 to maintain proper replication factor
+func (s *Server) cleanupExcessReplicas(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
+	if len(currentReplicas) <= 3 {
+		return // Nothing to cleanup
+	}
+
+	// Only coordinate cleanup from the lexicographically lowest replica
+	if !s.shouldCoordinateReReplication(currentReplicas) {
+		return
+	}
+
+	filename := s.resolveFilename(meta)
+	desiredReplicas := s.ring.GetSuccessors(filename, 3)
+
+	// Build map of desired replicas
+	desiredMap := make(map[string]bool)
+	for _, node := range desiredReplicas {
+		desiredMap[node.String()] = true
+	}
+
+	// Find replicas that should be deleted (not in desired set)
+	excessNodes := make([]utils.NodeID, 0)
+	for _, current := range currentReplicas {
+		if !desiredMap[current.String()] {
+			excessNodes = append(excessNodes, current)
+		}
+	}
+
+	// Only delete enough to get back to N=3
+	toDelete := len(currentReplicas) - 3
+	if len(excessNodes) > toDelete {
+		excessNodes = excessNodes[:toDelete]
+	}
+
+	if len(excessNodes) == 0 {
+		log.Printf("[Cleanup] File %s has %d replicas but all are in desired set", fileID, len(currentReplicas))
+		return
+	}
+
+	log.Printf("[Cleanup] Deleting file %s from %d excess nodes (current=%d, target=3)", fileID, len(excessNodes), len(currentReplicas))
+	s.deleteFileFromNodes(fileID, excessNodes)
 }
 
 // checkAndRebalance verifies that replicas are stored on the correct ring successors
