@@ -153,15 +153,15 @@ func DefaultTimeoutConfig() TimeoutConfig {
 // Updated for real-world network conditions with DFS traffic
 func OptimalTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
-		FailureTimeout:   4 * time.Second, // Faster failure detection for demos while remaining stable
-		CleanupTimeout:   1 * time.Second, // Quickly drop stale entries
-		SuspicionTimeout: 3 * time.Second, // Matches suspicion manager tuning
+		FailureTimeout:   8 * time.Second, // Increased for network variability
+		CleanupTimeout:   3 * time.Second, // Quicker cleanup
+		SuspicionTimeout: 6 * time.Second, // Increased to match suspicion manager (prevents oscillation)
 
-		GossipPeriod:   750 * time.Millisecond, // Piggyback updates flow more often
-		ProtocolPeriod: 750 * time.Millisecond, // SWIM pings at higher cadence
-		AckTimeout:     250 * time.Millisecond, // Keeps indirect probes responsive
+		GossipPeriod:   1 * time.Second,        // Reduced frequency to lower network load
+		ProtocolPeriod: 1 * time.Second,        // Standard SWIM period for stability
+		AckTimeout:     500 * time.Millisecond, // Realistic timeout for real networks
 
-		CheckInterval: 200 * time.Millisecond, // Frequent failure checks to reduce wait time
+		CheckInterval: 500 * time.Millisecond, // Less aggressive checking
 	}
 }
 

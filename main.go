@@ -44,10 +44,10 @@ func NewController(config utils.Config) (*Controller, error) {
 	membership := utils.NewMembershipList(config.NodeID)
 	var controller *Controller
 	opts := utils.Options{
-		SuspicionTimeout:   3 * time.Second,        // Faster recovery while dampening guards oscillations
-		CheckInterval:      200 * time.Millisecond, // Quicker checks speed up failure confirmation
+		SuspicionTimeout:   6 * time.Second,        // Increased from 2s to 6s for real networks with DFS traffic
+		CheckInterval:      500 * time.Millisecond, // Reduced frequency from 200ms
 		RequireReports:     1,
-		ConfirmedRetention: 2 * time.Second,
+		ConfirmedRetention: 3 * time.Second,
 		OnSuspect: func(target utils.NodeID, inc int32, reporters []utils.NodeID) {
 			membership.Lock()
 			if m, ok := membership.Members[target.String()]; ok {
