@@ -50,7 +50,7 @@ func (s *Server) Stop() {
 
 // backgroundTasks periodically updates the ring and checks for re-replication
 func (s *Server) backgroundTasks() {
-	ticker := time.NewTicker(15 * time.Second) // Conservative: check every 15 seconds
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds for responsiveness
 	defer ticker.Stop()
 
 	for {

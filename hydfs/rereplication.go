@@ -23,11 +23,11 @@ func (s *Server) checkForReReplication() {
 // TriggerReReplication allows external observers (e.g., failure detector) to kick off
 // an immediate re-replication attempt.
 func (s *Server) TriggerReReplication(reason string) {
-	// Add delay before starting re-replication to let membership stabilize
-	// This is critical when nodes fail/leave to avoid network flooding
+	// Add brief delay before starting re-replication to let membership stabilize
+	// This prevents flooding when multiple failure events occur simultaneously
 	if reason != "background" {
-		log.Printf("[ReReplication] Delaying re-replication for 3s (reason=%s) to stabilize membership", reason)
-		time.Sleep(3 * time.Second)
+		log.Printf("[ReReplication] Delaying re-replication for 1s (reason=%s) to stabilize membership", reason)
+		time.Sleep(1 * time.Second) // Reduced from 3s - just enough to batch events
 	}
 	go s.runReReplication(reason)
 }
@@ -51,14 +51,13 @@ func (s *Server) performReReplication(reason string) {
 	}
 
 	for i, fileID := range fileIDs {
-		// Add more aggressive throttling between file re-replications
-		// This is CRITICAL to prevent network flooding during mass re-replication
+		// Add throttling between file re-replications to prevent network flooding
 		if i > 0 {
-			// Longer delay between each file, especially for triggered re-replication
+			// Small delay between files to pace requests
 			if reason != "background" {
-				time.Sleep(1 * time.Second) // 1 second between files for triggered events
-			} else if i%3 == 0 {
-				time.Sleep(500 * time.Millisecond) // Brief pause every 3 files for background
+				time.Sleep(200 * time.Millisecond) // Reduced from 1s
+			} else if i%5 == 0 {
+				time.Sleep(100 * time.Millisecond) // Brief pause every 5 files
 			}
 		}
 
@@ -164,7 +163,7 @@ func (s *Server) findCurrentReplicasForFile(fileID string) []utils.NodeID {
 			defer func() { <-semaphore }()
 
 			// Add small delay between checks to pace requests
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond) // Reduced from 50ms
 
 			url := s.buildReplicaURL(node, fmt.Sprintf("/internal/get-meta?fileid=%s", fileID))
 			resp, err := s.Client.Get(url)
@@ -265,7 +264,7 @@ func (s *Server) copyFileToMissingNodes(fileID string, meta *Metadata, sourceNod
 		for idx, targetNode := range targetNodes {
 			// Add small delay between replica sends to avoid network bursts
 			if idx > 0 {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(20 * time.Millisecond) // Reduced from 100ms
 			}
 
 			wg.Add(1)
