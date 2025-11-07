@@ -50,7 +50,7 @@ func (s *Server) Stop() {
 
 // backgroundTasks periodically updates the ring and checks for re-replication
 func (s *Server) backgroundTasks() {
-	ticker := time.NewTicker(2 * time.Second) // Faster cadence keeps membership and replicas fresh
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds for responsiveness
 	defer ticker.Stop()
 
 	for {
