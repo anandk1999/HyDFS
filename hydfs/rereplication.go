@@ -50,10 +50,6 @@ func (s *Server) performReReplication(reason string) {
 		return
 	}
 
-	// NEVER rebalance automatically - only maintain N=3 replicas
-	// Rebalancing should only happen on explicit administrator action (not implemented)
-	// This prevents cascading copies when nodes leave/fail
-
 	for i, fileID := range fileIDs {
 		// Add more aggressive throttling between file re-replications
 		// This is CRITICAL to prevent network flooding during mass re-replication
@@ -71,19 +67,77 @@ func (s *Server) performReReplication(reason string) {
 			continue
 		}
 
-		currentReplicas := s.findCurrentReplicasForFile(fileID)
+		// REQUIREMENT: Files must be stored on EXACTLY the first N=3 ring successors
+		// We must enforce this invariant at all times
+		s.enforceRingPlacement(fileID, meta, reason)
+	}
+}
 
-		// ONLY maintain N=3 replicas - do NOT rebalance to new ring successors
-		// This prevents replica proliferation when nodes leave
-		if len(currentReplicas) < 3 {
-			log.Printf("[ReReplication] File %s replicas below quorum (%d/3), reason=%s", fileID, len(currentReplicas), reason)
-			s.reReplicateFile(fileID, meta, currentReplicas)
-		} else if len(currentReplicas) > 3 {
-			// If we somehow have MORE than 3 replicas, clean up excess
-			log.Printf("[ReReplication] File %s has EXCESS replicas (%d/3), cleaning up", fileID, len(currentReplicas))
-			s.cleanupExcessReplicas(fileID, meta, currentReplicas)
+// enforceRingPlacement ensures file is on exactly the first N=3 ring successors
+// This handles both under-replication (< 3) and incorrect placement
+func (s *Server) enforceRingPlacement(fileID string, meta *Metadata, reason string) {
+	filename := s.resolveFilename(meta)
+
+	// Get the CORRECT ring successors for this file
+	desiredReplicas := s.ring.GetSuccessors(filename, 3)
+	if len(desiredReplicas) == 0 {
+		log.Printf("[ReReplication] No ring successors found for file %s", fileID)
+		return
+	}
+
+	// Find which nodes CURRENTLY have the file
+	currentReplicas := s.findCurrentReplicasForFile(fileID)
+
+	// Only coordinate from lexicographically lowest current replica
+	if len(currentReplicas) > 0 && !s.shouldCoordinateReReplication(currentReplicas) {
+		return
+	}
+
+	// Build maps for comparison
+	desiredMap := make(map[string]bool)
+	for _, node := range desiredReplicas {
+		desiredMap[node.String()] = true
+	}
+
+	currentMap := make(map[string]bool)
+	for _, node := range currentReplicas {
+		currentMap[node.String()] = true
+	}
+
+	// Find nodes that SHOULD have it but DON'T (need to copy TO)
+	missingNodes := make([]utils.NodeID, 0)
+	for _, desired := range desiredReplicas {
+		if !currentMap[desired.String()] {
+			missingNodes = append(missingNodes, desired)
 		}
-		// Note: If len(currentReplicas) == 3, do nothing - system is healthy
+	}
+
+	// Find nodes that HAVE it but SHOULDN'T (need to delete FROM)
+	excessNodes := make([]utils.NodeID, 0)
+	for _, current := range currentReplicas {
+		if !desiredMap[current.String()] {
+			excessNodes = append(excessNodes, current)
+		}
+	}
+
+	// Log what we're doing
+	if len(missingNodes) > 0 || len(excessNodes) > 0 {
+		log.Printf("[ReReplication] File %s (%s): current=%d, desired=%d, missing=%d, excess=%d, reason=%s",
+			fileID, filename, len(currentReplicas), len(desiredReplicas), len(missingNodes), len(excessNodes), reason)
+	}
+
+	// Step 1: Copy to missing nodes (if we have any source replicas)
+	if len(missingNodes) > 0 {
+		if len(currentReplicas) == 0 {
+			log.Printf("[ReReplication] ERROR: File %s has no replicas to copy from", fileID)
+			return
+		}
+		s.copyFileToMissingNodes(fileID, meta, currentReplicas[0], missingNodes)
+	}
+
+	// Step 2: Delete from excess nodes
+	if len(excessNodes) > 0 {
+		s.deleteFileFromNodes(fileID, excessNodes)
 	}
 }
 
@@ -166,63 +220,20 @@ func (s *Server) shouldCoordinateReReplication(current []utils.NodeID) bool {
 }
 
 // reReplicateFile copies a file from existing replicas to new nodes to maintain N=3
-func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
-	if len(currentReplicas) >= 3 {
-		return
-	}
-
-	if !s.shouldCoordinateReReplication(currentReplicas) {
+// copyFileToMissingNodes copies all blocks of a file from sourceNode to targetNodes
+func (s *Server) copyFileToMissingNodes(fileID string, meta *Metadata, sourceNode utils.NodeID, targetNodes []utils.NodeID) {
+	if len(targetNodes) == 0 {
 		return
 	}
 
 	// Refresh metadata to ensure we replicate the most recent version
-	freshMetas := s.performGetMetadata(currentReplicas, fileID)
+	freshMetas := s.performGetMetadata([]utils.NodeID{sourceNode}, fileID)
 	if len(freshMetas) > 0 {
 		meta = s.findWinningMetadata(freshMetas)
 	}
 
 	filename := s.resolveFilename(meta)
-	desiredReplicas := s.ring.GetSuccessors(filename, 3)
-	if len(desiredReplicas) == 0 {
-		log.Printf("[ReReplication] No desired replicas found for file %s (filename=%s)", fileID, filename)
-		return
-	}
-
-	currentReplicaMap := make(map[string]bool)
-	for _, node := range currentReplicas {
-		currentReplicaMap[node.String()] = true
-	}
-
-	// Calculate how many MORE replicas we need to reach N=3
-	needed := 3 - len(currentReplicas)
-	if needed <= 0 {
-		return // Already have enough
-	}
-
-	// Find available nodes from ring successors that don't already have the file
-	targetNodes := make([]utils.NodeID, 0, needed)
-	for _, desired := range desiredReplicas {
-		if !currentReplicaMap[desired.String()] {
-			targetNodes = append(targetNodes, desired)
-			if len(targetNodes) >= needed {
-				break // Stop once we have enough target nodes
-			}
-		}
-	}
-
-	if len(targetNodes) == 0 {
-		log.Printf("[ReReplication] File %s: no available nodes to replicate to", fileID)
-		return
-	}
-
-	// Must have at least one source replica to copy from
-	if len(currentReplicas) == 0 {
-		log.Printf("[ReReplication] ERROR: No current replicas found for file %s", fileID)
-		return
-	}
-
-	sourceNode := currentReplicas[0]
-	log.Printf("[ReReplication] Copying file %s (%s) from %s to %d ring successors", fileID, filename, sourceNode.Address(), len(targetNodes))
+	log.Printf("[ReReplication] Copying file %s (%s) from %s to %d nodes", fileID, filename, sourceNode.Address(), len(targetNodes))
 
 	// Copy each block from source to all target nodes
 	for _, block := range meta.Blocks {
@@ -291,182 +302,6 @@ func (s *Server) reReplicateFile(fileID string, meta *Metadata, currentReplicas 
 	}
 
 	log.Printf("[ReReplication] Completed re-replication of file %s to %d new nodes", fileID, len(targetNodes))
-}
-
-// cleanupExcessReplicas removes replicas beyond N=3 to maintain proper replication factor
-func (s *Server) cleanupExcessReplicas(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
-	if len(currentReplicas) <= 3 {
-		return // Nothing to cleanup
-	}
-
-	// Only coordinate cleanup from the lexicographically lowest replica
-	if !s.shouldCoordinateReReplication(currentReplicas) {
-		return
-	}
-
-	filename := s.resolveFilename(meta)
-	desiredReplicas := s.ring.GetSuccessors(filename, 3)
-
-	// Build map of desired replicas
-	desiredMap := make(map[string]bool)
-	for _, node := range desiredReplicas {
-		desiredMap[node.String()] = true
-	}
-
-	// Find replicas that should be deleted (not in desired set)
-	excessNodes := make([]utils.NodeID, 0)
-	for _, current := range currentReplicas {
-		if !desiredMap[current.String()] {
-			excessNodes = append(excessNodes, current)
-		}
-	}
-
-	// Only delete enough to get back to N=3
-	toDelete := len(currentReplicas) - 3
-	if len(excessNodes) > toDelete {
-		excessNodes = excessNodes[:toDelete]
-	}
-
-	if len(excessNodes) == 0 {
-		log.Printf("[Cleanup] File %s has %d replicas but all are in desired set", fileID, len(currentReplicas))
-		return
-	}
-
-	log.Printf("[Cleanup] Deleting file %s from %d excess nodes (current=%d, target=3)", fileID, len(excessNodes), len(currentReplicas))
-	s.deleteFileFromNodes(fileID, excessNodes)
-}
-
-// checkAndRebalance verifies that replicas are stored on the correct ring successors
-// and redistributes if necessary (e.g., after node joins)
-func (s *Server) checkAndRebalance(fileID string, meta *Metadata, currentReplicas []utils.NodeID) {
-	filename := s.resolveFilename(meta)
-
-	// Refresh metadata from quorum to ensure we replicate the latest version
-	freshMetas := s.performGetMetadata(currentReplicas, fileID)
-	if len(freshMetas) > 0 {
-		meta = s.findWinningMetadata(freshMetas)
-	}
-
-	desiredReplicas := s.ring.GetSuccessors(filename, 3)
-
-	if len(desiredReplicas) == 0 {
-		return
-	}
-
-	// Build maps for comparison
-	currentMap := make(map[string]bool)
-	for _, node := range currentReplicas {
-		currentMap[node.String()] = true
-	}
-
-	desiredMap := make(map[string]bool)
-	for _, node := range desiredReplicas {
-		desiredMap[node.String()] = true
-	}
-
-	// Find nodes that should have the file but don't (need to copy TO)
-	missingNodes := make([]utils.NodeID, 0)
-	for _, desired := range desiredReplicas {
-		if !currentMap[desired.String()] {
-			missingNodes = append(missingNodes, desired)
-		}
-	}
-
-	// Find nodes that have the file but shouldn't (need to DELETE from)
-	excessNodes := make([]utils.NodeID, 0)
-	for _, current := range currentReplicas {
-		if !desiredMap[current.String()] {
-			excessNodes = append(excessNodes, current)
-		}
-	}
-
-	if len(missingNodes) == 0 && len(excessNodes) == 0 {
-		// Already balanced
-		return
-	}
-
-	// Only coordinate rebalance from the lexicographically lowest current replica
-	if !s.shouldCoordinateReReplication(currentReplicas) {
-		return
-	}
-
-	log.Printf("[Rebalance] File %s (%s) needs rebalancing: +%d nodes, -%d nodes",
-		fileID, filename, len(missingNodes), len(excessNodes))
-
-	// Step 1: Copy to missing nodes
-	if len(missingNodes) > 0 && len(currentReplicas) > 0 {
-		sourceNode := currentReplicas[0]
-		s.copyFileToNodes(fileID, meta, sourceNode, missingNodes)
-	}
-
-	// Step 2: Delete from excess nodes
-	if len(excessNodes) > 0 {
-		s.deleteFileFromNodes(fileID, excessNodes)
-	}
-
-	log.Printf("[Rebalance] Completed rebalancing for file %s", fileID)
-}
-
-// copyFileToNodes replicates all blocks of a file from source to target nodes
-func (s *Server) copyFileToNodes(fileID string, meta *Metadata, sourceNode utils.NodeID, targetNodes []utils.NodeID) {
-	metaBytes, _ := json.Marshal(meta)
-
-	for _, block := range meta.Blocks {
-		// Fetch block from source
-		url := s.buildReplicaURL(sourceNode, fmt.Sprintf("/internal/get-block?fileid=%s&blockid=%s", fileID, block.BlockID))
-		resp, err := s.Client.Get(url)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			log.Printf("[Rebalance] Failed to fetch block %s from %s: %v", block.BlockID, sourceNode.Address(), err)
-			if resp != nil {
-				resp.Body.Close()
-			}
-			continue
-		}
-
-		blockData, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[Rebalance] Failed to read block %s: %v", block.BlockID, err)
-			continue
-		}
-
-		blockInfoBytes, _ := json.Marshal(block)
-
-		// Send to all target nodes
-		var wg sync.WaitGroup
-		for _, targetNode := range targetNodes {
-			wg.Add(1)
-			go func(node utils.NodeID, data []byte) {
-				defer wg.Done()
-
-				body := &bytes.Buffer{}
-				writer := multipart.NewWriter(body)
-				writer.WriteField("fileid", fileID)
-				writer.WriteField("metadata", string(metaBytes))
-				writer.WriteField("blockinfo", string(blockInfoBytes))
-
-				part, _ := writer.CreateFormFile("blockdata", block.BlockID)
-				part.Write(data)
-				writer.Close()
-
-				url := s.buildReplicaURL(node, "/internal/write")
-				req, _ := http.NewRequest(http.MethodPost, url, body)
-				req.Header.Set("Content-Type", writer.FormDataContentType())
-
-				resp, err := s.Client.Do(req)
-				if err == nil && resp.StatusCode == http.StatusOK {
-					log.Printf("[Rebalance] Copied block %s of file %s to %s", block.BlockID, fileID, node.Address())
-					resp.Body.Close()
-				} else {
-					log.Printf("[Rebalance] Failed to copy block %s to %s: %v", block.BlockID, node.Address(), err)
-					if resp != nil {
-						resp.Body.Close()
-					}
-				}
-			}(targetNode, blockData)
-		}
-		wg.Wait()
-	}
 }
 
 // deleteFileFromNodes removes a file from nodes that should no longer store it

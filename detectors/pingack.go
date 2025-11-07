@@ -803,6 +803,11 @@ func (p *PingAckManager) handleJoin(msg utils.Message, from *net.UDPAddr) {
 	}
 	p.membership.Unlock()
 
+	// Clear dampening state for rejoining node to allow normal operation
+	if p.suspicionMgr != nil {
+		p.suspicionMgr.ClearDampeningState(msg.Sender)
+	}
+
 	// Add updates outside the lock to avoid deadlock
 	for _, failedUpdate := range oldFailedUpdates {
 		p.membership.AddRecentUpdateSafe(failedUpdate)

@@ -355,6 +355,11 @@ func (sm *SuspicionManager) check(now time.Time) {
 		}
 		sm.membership.Unlock()
 
+		// Clear dampening state for failed nodes to allow clean rejoin
+		for _, c := range confirmedMembers {
+			sm.ClearDampeningState(c.target)
+		}
+
 		// Call callbacks outside the lock
 		for _, c := range confirmedMembers {
 			if sm.Opts.OnConfirm != nil {
@@ -376,4 +381,14 @@ func (sm *SuspicionManager) reportersList(e *suspectEntry) []NodeID {
 // GetTimeout exposes the suspicion timeout (handy for tests/debug).
 func (sm *SuspicionManager) GetTimeout() time.Duration {
 	return sm.Opts.SuspicionTimeout
+}
+
+// ClearDampeningState removes dampening history for a node
+// This should be called when a node is confirmed as FAILED or successfully JOINs
+// to allow it to participate normally in the membership protocol
+func (sm *SuspicionManager) ClearDampeningState(target NodeID) {
+	key := target.String()
+	sm.mu.Lock()
+	delete(sm.entries, key)
+	sm.mu.Unlock()
 }
