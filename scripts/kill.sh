@@ -42,7 +42,7 @@ fi
 echo "Starting ${#NORMAL_NODES[@]} normal nodes..."
 for host in "${NORMAL_NODES[@]}"; do
     echo ">>> Killing process on port 8080 at $host"
-    ssh "$REMOTE_USER@$host" "pkill -f mp2-node" &
+    ssh "$REMOTE_USER@$host" "pkill -f client" &
 done
 
 wait
