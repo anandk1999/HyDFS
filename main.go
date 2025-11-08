@@ -503,7 +503,10 @@ func (cs *ControlServer) handleListMemIDs(w http.ResponseWriter, r *http.Request
 	nodeHashes := cs.hydfs.GetNodeHashes()
 	members := cs.controller.membership.GetAllMembers()
 	sort.Slice(members, func(i, j int) bool {
-		return members[i].ID.String() < members[j].ID.String()
+		// return members[i].ID.String() < members[j].ID.String()
+		hashI := nodeHashes[members[i].ID.String()]
+		hashJ := nodeHashes[members[j].ID.String()]
+		return hashI < hashJ
 	})
 
 	for _, member := range members {
