@@ -1,93 +1,66 @@
-# MP3-G02
+# MP3-G02 — HyDFS Cluster Testbed
 
+This repository contains our HyDFS implementation and a set of helper scripts to deploy, run, and measure system behavior across a 10‑VM cluster used for the MP assignment.
 
+## Quick overview
+- `scripts/cluster.sh` — full cluster orchestration (setup, build, start, stop, clean, cmd, logs, rejoin, leave)
+- `scripts/test*.sh` — test scenarios (test1..test5)
+- `hosts.txt` — list of the cluster hostnames (one per line)
 
-## Getting started
+## Cluster management: `scripts/cluster.sh`
+This is the recommended, all-in-one tool to operate the cluster.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Common commands (run from repo root):
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+- Start the cluster (VM1 is introducer):
 
-## Add your files
+  ./scripts/cluster.sh start
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- Stop all daemons:
 
-```
-cd existing_repo
-git remote add origin https://gitlab.engr.illinois.edu/saik2/mp3-g02.git
-git branch -M main
-git push -uf origin main
-```
+  ./scripts/cluster.sh stop
 
-## Integrate with your tools
+- Clean (stop + remove logs & storage):
 
-- [ ] [Set up project integrations](https://gitlab.engr.illinois.edu/saik2/mp3-g02/-/settings/integrations)
+  ./scripts/cluster.sh clean
 
-## Collaborate with your team
+- Run a client command on a specific VM (VM index = line number in `hosts.txt`):
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+  ./scripts/cluster.sh cmd 3 create /tmp/localfile mydfsfile
 
-## Test and Deploy
+  Notes:
+  - `cmd` will run the `client` binary on the chosen VM with `-control-port 18080 -cmd ...`.
+  - `cmd` builds the binary remotely before running the command.
 
-Use the built-in continuous integration in GitLab.
+- Tail/grep node logs across the cluster:
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+  ./scripts/cluster.sh logs "SUSPECT|ERROR|panic|FAILED"
 
-***
+- Rejoin a node (useful if a node is missing):
 
-# Editing this README
+  ./scripts/cluster.sh rejoin <VM_INDEX>
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+  `rejoin` kills the old process on that node, clears storage, rebuilds, and starts the daemon joined to the introducer.
 
-## Suggestions for a good README
+## Tests (test1..test5)
+Each `scripts/test*.sh` has a usage header at the top. Tests generally expect the repo and `client` binary to be present on the VM that will run the client.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Examples:
 
-## Name
-Choose a self-explaining name for your project.
+- Test 1 — create 5 files sequentially (writer VM is argument; default `localhost`):
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+  ./scripts/test1_create.sh pnj2@fa25-cs425-0203.cs.illinois.edu
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+  Or run on a VM directly:
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+  ./test1_create.sh localhost
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+- Test 5 — multiappend + merge (example usage is in the script header):
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+  ./scripts/test5_multiappend_merge.sh pnj2@fa25-cs425-0203.cs.illinois.edu demo_foo.txt \
+    pnj2@fa25-cs425-0203.cs.illinois.edu /home/pnj2/mp3-g02/business/business_1.txt \
+    pnj2@fa25-cs425-0204.cs.illinois.edu /home/pnj2/mp3-g02/business/business_2.txt
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Notes:
+- When running tests from your local machine, `test*.sh` will SSH to the specified writer/initiator. Make sure input local files exist on the remote writer VM or `scp` them there first.
+- Many tests assume the `business/` directory is present on each VM (it is copied by `deploy_all.sh`).
