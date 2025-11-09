@@ -65,14 +65,10 @@ func (s *Server) backgroundTasks() {
 			if currentCount > s.lastMemberCount {
 				log.Printf("[HyDFS] Membership increased from %d to %d nodes, triggering rebalancing",
 					s.lastMemberCount, currentCount)
-				// DISABLED: Don't trigger immediate re-replication on joins
-				// Let the periodic background check handle it naturally
-				// This prevents flooding when nodes rejoin during recovery
-				// go s.TriggerReReplication("node join detected")
+				// ENABLED: Trigger immediate re-replication/rebalancing on joins
+				go s.TriggerReReplication("node join detected")
 			}
-			s.lastMemberCount = currentCount
-
-			// Check for files that need re-replication
+			s.lastMemberCount = currentCount // Check for files that need re-replication
 			s.checkForReReplication()
 
 			// Periodic background merge to reconcile divergent file versions
