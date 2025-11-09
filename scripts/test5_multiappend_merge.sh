@@ -96,22 +96,27 @@ echo "\n== Getting replica information =="
 LS_OUTPUT=$(ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd ls '$HYDFSFILE'")
 echo "$LS_OUTPUT"
 
-# Extract the first two replica addresses from ls output
+# Extract the first two replica ports from ls output
 # Format: "  - 172.22.154.6:8082 (RingID: 2781537700)"
-REPLICA_ADDRESSES=($(echo "$LS_OUTPUT" | grep -E '^\s+-\s+[0-9]+\.' | sed -E 's/^\s+-\s+([0-9.]+:[0-9]+).*/\1/' | head -2))
+# Port 8080 = VM1, 8081 = VM2, ..., 8089 = VM10
+REPLICA_PORTS=($(echo "$LS_OUTPUT" | grep -E '^\s+-\s+[0-9]+\.' | sed -E 's/.*:([0-9]+).*/\1/' | head -2))
 
-if [[ ${#REPLICA_ADDRESSES[@]} -lt 2 ]]; then
-  echo "Error: Could not extract at least 2 replica addresses from ls output"
+if [[ ${#REPLICA_PORTS[@]} -lt 2 ]]; then
+  echo "Error: Could not extract at least 2 replica ports from ls output"
   exit 1
 fi
 
-VM_A="${REPLICA_ADDRESSES[0]}"
-VM_B="${REPLICA_ADDRESSES[1]}"
+# Convert ports to VM numbers (8080->1, 8081->2, ..., 8089->10)
+VM_NUM_A=$((${REPLICA_PORTS[0]} - 8079))
+VM_NUM_B=$((${REPLICA_PORTS[1]} - 8079))
+
+VM_A="${HOSTS[$((VM_NUM_A - 1))]}"
+VM_B="${HOSTS[$((VM_NUM_B - 1))]}"
 
 OUT_A="/tmp/hy_replica_A"
 OUT_B="/tmp/hy_replica_B"
 
-echo "\n== Fetching from replica $VM_A and $VM_B =="
+echo "\n== Fetching from replica VM $VM_NUM_A ($VM_A) and VM $VM_NUM_B ($VM_B) =="
 $CLIENT -cmd getfromreplica "$VM_A" "$HYDFSFILE" "$OUT_A"
 $CLIENT -cmd getfromreplica "$VM_B" "$HYDFSFILE" "$OUT_B"
 
