@@ -49,7 +49,7 @@ for count in "${FILE_COUNTS[@]}"; do
     # Wait for rebalancing to complete.
     # This is tricky. We'll wait for a fixed time.
     echo "Waiting for rebalancing to complete..."
-    sleep 60 # Adjust as needed
+    sleep 5 # Adjust as needed
 
     # Stop measuring bandwidth
     kill $ifstat_pid 2>/dev/null || true
