@@ -35,8 +35,28 @@ for count in "${FILE_COUNTS[@]}"; do
     echo "Preload complete."
 
     # 2. Start the 4th node to trigger rebalancing
+    # Get introducer address from node 1
+    INTRODUCER_HOST="${HOSTS[0]}"
+    INTRODUCER_IP=$(ssh "${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
+    INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
+    
+    # Node 4 is at index 3, so it uses port 8083 and control-port 18080
+    NODE_PORT=8083
+    NODE_CONTROL_PORT=18080
+    
     echo "Starting node ${NODE_TO_ADD} to trigger rebalancing..."
-    ssh "${NODE_TO_ADD}" "cd ${REMOTE_DIR}; ./client" &
+    echo "Introducer: ${INTRODUCER_ADDR}"
+    
+    # Kill any existing client process on node 4 and clean up storage
+    ssh "${NODE_TO_ADD}" "
+        cd ${REMOTE_DIR}
+        pkill -f client 2>/dev/null || true
+        rm -rf hydfs_storage
+        nohup ./client -port ${NODE_PORT} -control-port ${NODE_CONTROL_PORT} -introducer ${INTRODUCER_ADDR} > node.log 2>&1 &
+    " &
+    
+    # Give the node a moment to start joining
+    sleep 3
     
     # 3. Measure bandwidth (sample every 1 second)
     # Kill any existing ifstat processes first
