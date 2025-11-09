@@ -28,10 +28,6 @@ Common commands (run from repo root):
 
   ./scripts/cluster.sh cmd 3 create /tmp/localfile mydfsfile
 
-  Notes:
-  - `cmd` will run the `client` binary on the chosen VM with `-control-port 18080 -cmd ...`.
-  - `cmd` builds the binary remotely before running the command.
-
 - Tail/grep node logs across the cluster:
 
   ./scripts/cluster.sh logs "SUSPECT|ERROR|panic|FAILED"
@@ -47,20 +43,37 @@ Each `scripts/test*.sh` has a usage header at the top. Tests generally expect th
 
 Examples:
 
-- Test 1 — create 5 files sequentially (writer VM is argument; default `localhost`):
+- Test 1 — create 5 files sequentially (specify VM number and business file numbers):
 
-  ./scripts/test1_create.sh pnj2@fa25-cs425-0203.cs.illinois.edu
+  # Create files using VM1 and business files 10,2,3,4,5
+  ./scripts/test1_create.sh 1 10 2 3 4 5
 
-  Or run on a VM directly:
+  This will create five files in HyDFS using the specified business files.
 
-  ./test1_create.sh localhost
+- Test 2 — get file and verify replicas (tests file retrieval and replica placement):
 
-- Test 5 — multiappend + merge (example usage is in the script header):
+  # Get a file using different reader/writer VMs
+  ./scripts/test2_get_and_replicas.sh demo_business_1.txt
 
-  ./scripts/test5_multiappend_merge.sh pnj2@fa25-cs425-0203.cs.illinois.edu demo_foo.txt \
-    pnj2@fa25-cs425-0203.cs.illinois.edu /home/pnj2/mp3-g02/business/business_1.txt \
-    pnj2@fa25-cs425-0204.cs.illinois.edu /home/pnj2/mp3-g02/business/business_2.txt
+  This tests file retrieval and verifies replica placement on the ring.
 
-Notes:
-- When running tests from your local machine, `test*.sh` will SSH to the specified writer/initiator. Make sure input local files exist on the remote writer VM or `scp` them there first.
-- Many tests assume the `business/` directory is present on each VM (it is copied by `deploy_all.sh`).
+- Test 3 — test re-replication after node failure:
+
+  # Kill nodes 3 and 5, then verify re-replication of the file
+  ./scripts/test3_rereplication.sh demo_business_1.txt 3 5
+
+  This kills specified nodes and verifies the system properly re-replicates the data.
+
+- Test 4 — verify append ordering and read-my-writes:
+
+  # From VM1, append business files 5 and 10 to demo_foo.txt
+  ./scripts/test4_append_ordering.sh 1 demo_foo.txt 5 10
+
+  This verifies append ordering and read-my-writes semantics.
+
+- Test 5 — multiappend + merge with concurrent clients:
+
+  # Run concurrent appends from VMs 1,2,3,4 using business files 5,10,15,20
+  ./scripts/test5_multiappend_merge.sh 1 demo_foo.txt 1 5 2 10 3 15 4 20
+
+  This tests concurrent appends from multiple clients followed by a merge operation.
