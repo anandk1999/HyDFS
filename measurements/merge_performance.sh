@@ -34,27 +34,30 @@ for append_size in "${APPEND_SIZES[@]}"; do
             ./client -cmd create initial_file.tmp sdfs_merge_test &>/dev/null
             rm initial_file.tmp
 
-            # 2. Create the data to be appended
+            # 2. Create the data to be appended on all VMs
             dd if=/dev/urandom of=append_data.tmp bs=$append_size count=1 &>/dev/null
-
-            # 3. Perform concurrent appends from different VMs
-            pids=()
+            
+            # Copy append data to all VMs that will participate
             for j in $(seq 1 $num_clients); do
-                node_num=$(( (j - 1) % 4 )) # Cycle through nodes 0-3
+                node_num=$(( (j - 1) % 4 ))
                 node="${HOSTS[$node_num]}"
-                scp append_data.tmp $node:~/append_data.tmp &>/dev/null
-                ssh $node "cd ${REMOTE_DIR}; ./client -cmd append ~/append_data.tmp sdfs_merge_test" &
-                pids+=($!)
+                scp append_data.tmp $node:~/append_data_${j}.tmp &>/dev/null
             done
 
-            # Wait for all appends to complete
-            for pid in "${pids[@]}"; do
-                wait $pid
+            # 3. Build multiappend command arguments: HyDFSfile VM1 localfile1 VM2 localfile2 ...
+            multiappend_args="sdfs_merge_test"
+            for j in $(seq 1 $num_clients); do
+                node_num=$(( (j - 1) % 4 ))
+                node="${HOSTS[$node_num]}"
+                multiappend_args="$multiappend_args $node ~/append_data_${j}.tmp"
             done
+
+            # 4. Perform concurrent appends using multiappend
+            ./client -cmd multiappend $multiappend_args &>/dev/null
             
             rm append_data.tmp
 
-            # 4. Measure merge time
+            # 5. Measure merge time
             start_time=$(date +%s%N)
             ./client -cmd merge sdfs_merge_test &>/dev/null
             end_time=$(date +%s%N)
@@ -62,7 +65,7 @@ for append_size in "${APPEND_SIZES[@]}"; do
             elapsed_time=$((($end_time - $start_time) / 1000000)) # in milliseconds
             total_time=$(($total_time + $elapsed_time))
 
-            # 5. Note: No delete command - file will remain, but will be overwritten in next iteration
+            # 6. Note: No delete command - file will remain, but will be overwritten in next iteration
             sleep 2
         done
 

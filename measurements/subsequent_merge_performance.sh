@@ -35,40 +35,44 @@ for append_size in "${APPEND_SIZES[@]}"; do
             ./client -cmd create initial_file.tmp sdfs_sub_merge_test &>/dev/null
             rm initial_file.tmp
 
-            # 2. Create the data to be appended
+            # 2. Create the data to be appended on all VMs
             dd if=/dev/urandom of=append_data.tmp bs=$append_size count=1 &>/dev/null
-
-            # 3. Perform concurrent appends
-            pids=()
+            
+            # Copy append data to all VMs that will participate
             for j in $(seq 1 $num_clients); do
                 node_num=$(( (j - 1) % 4 ))
                 node="${HOSTS[$node_num]}"
-                scp append_data.tmp $node:~/append_data.tmp &>/dev/null
-                ssh $node "cd ${REMOTE_DIR}; ./client -cmd append ~/append_data.tmp sdfs_sub_merge_test" &
-                pids+=($!)
+                scp append_data.tmp $node:~/append_data_${j}.tmp &>/dev/null
             done
 
-            for pid in "${pids[@]}"; do
-                wait $pid
+            # 3. Build multiappend command arguments: HyDFSfile VM1 localfile1 VM2 localfile2 ...
+            multiappend_args="sdfs_sub_merge_test"
+            for j in $(seq 1 $num_clients); do
+                node_num=$(( (j - 1) % 4 ))
+                node="${HOSTS[$node_num]}"
+                multiappend_args="$multiappend_args $node ~/append_data_${j}.tmp"
             done
+
+            # 4. Perform concurrent appends using multiappend
+            ./client -cmd multiappend $multiappend_args &>/dev/null
             
             rm append_data.tmp
 
-            # 4. First merge
+            # 5. First merge
             start_time1=$(date +%s%N)
             ./client -cmd merge sdfs_sub_merge_test &>/dev/null
             end_time1=$(date +%s%N)
             elapsed_time1=$((($end_time1 - $start_time1) / 1000000))
             total_time1=$(($total_time1 + $elapsed_time1))
 
-            # 5. Second merge
+            # 6. Second merge
             start_time2=$(date +%s%N)
             ./client -cmd merge sdfs_sub_merge_test &>/dev/null
             end_time2=$(date +%s%N)
             elapsed_time2=$((($end_time2 - $start_time2) / 1000000))
             total_time2=$(($total_time2 + $elapsed_time2))
 
-            # 6. Note: No delete command - file will remain, but will be overwritten in next iteration
+            # 7. Note: No delete command - file will remain, but will be overwritten in next iteration
             sleep 2
         done
 
