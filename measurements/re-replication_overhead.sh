@@ -40,6 +40,10 @@ for size in "${FILE_SIZES[@]}"; do
     ssh "${NODE_TO_KILL}" "pkill -f client" &
 
     # 3. Measure re-replication time and bandwidth
+    # Kill any existing ifstat processes first
+    pkill -f ifstat 2>/dev/null || true
+    sleep 1
+    
     # Start measuring bandwidth (sample every 1 second)
     ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${size}.log &
     ifstat_pid=$!
@@ -57,10 +61,13 @@ for size in "${FILE_SIZES[@]}"; do
     while [ $elapsed -lt $MAX_WAIT ]; do
         # Check if re-replication is complete by listing files and checking replica counts
         # This assumes your HyDFS ls command shows replica counts
-        replica_check=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; echo 'ls' | ./client -control-port 18080 -cmd" 2>/dev/null | grep -c "3 replicas" || echo "0")
+        replica_check=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; echo 'ls' | ./client -control-port 18080 -cmd" 2>/dev/null | grep -c "3 replicas" 2>/dev/null || echo "0")
+        
+        # Clean up the output - remove any newlines/whitespace
+        replica_check=$(echo "$replica_check" | tr -d '\n' | tr -d ' ')
         
         # If we have 100 files with 3 replicas each, re-replication is complete
-        if [ "$replica_check" -ge 100 ]; then
+        if [ "$replica_check" -ge 100 ] 2>/dev/null; then
             echo "Re-replication complete! All files restored to 3 replicas."
             break
         fi
