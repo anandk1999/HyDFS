@@ -51,8 +51,11 @@ if [ ! -f "$HOSTS_FILE" ]; then
     exit 1
 fi
 
-# Read hosts into array (zsh arrays are 1-indexed by default, use explicit syntax)
-HOSTS=("${(@f)$(cat "$HOSTS_FILE")}")
+# Read hosts into array (bash-compatible)
+HOSTS=()
+while IFS= read -r line; do
+    HOSTS+=("$line")
+done < "$HOSTS_FILE"
 NUM_VMS=${#HOSTS[@]}
 
 # --- Colors for better output ---
@@ -103,8 +106,8 @@ case "$COMMAND" in
         echo -e "${YELLOW}Starting HyDFS cluster on all ${NUM_VMS} VMs...${NC}"
 
         # Get the IP of the introducer (VM1)
-        # zsh arrays are 1-indexed by default
-        INTRODUCER_HOST=${HOSTS[1]}
+        # bash arrays are 0-indexed
+        INTRODUCER_HOST=${HOSTS[0]}
         INTRODUCER_IP=$(ssh "${REMOTE_USER}@${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
         INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
         echo "Introducer is ${INTRODUCER_HOST} at ${INTRODUCER_ADDR}"
@@ -119,10 +122,10 @@ case "$COMMAND" in
 
         sleep 2 # Give it a moment to come up
 
-        # Start other nodes (zsh for loop with range)
-        for i in {2..$NUM_VMS}; do
+        # Start other nodes (bash for loop with range)
+        for ((i=1; i<NUM_VMS; i++)); do
             host=${HOSTS[$i]}
-            port=$((8080 + i - 1))
+            port=$((8080 + i))
             cport=$((18080))
             echo "Starting daemon on ${host} (ports ${port}/${cport}), joining introducer..."
             ssh "${REMOTE_USER}@${host}" "
@@ -170,8 +173,8 @@ case "$COMMAND" in
             exit 1
         fi
         
-        # zsh arrays are 1-indexed, so use VM_INDEX directly
-        TARGET_HOST=${HOSTS[${VM_INDEX}]}
+        # bash arrays are 0-indexed, so subtract 1 from user input
+        TARGET_HOST=${HOSTS[$((VM_INDEX - 1))]}
         CONTROL_PORT=$((18080))
         
         # Remaining args are the command and its arguments
