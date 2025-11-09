@@ -31,7 +31,7 @@ for append_size in "${APPEND_SIZES[@]}"; do
         for i in $(seq 1 $NUM_READINGS); do
             # 1. Create and put the initial file
             dd if=/dev/urandom of=initial_file.tmp bs=$INITIAL_FILE_SIZE count=1 &>/dev/null
-            ./client put initial_file.tmp sdfs_merge_test &>/dev/null
+            ./client -cmd create initial_file.tmp sdfs_merge_test &>/dev/null
             rm initial_file.tmp
 
             # 2. Create the data to be appended
@@ -40,10 +40,10 @@ for append_size in "${APPEND_SIZES[@]}"; do
             # 3. Perform concurrent appends from different VMs
             pids=()
             for j in $(seq 1 $num_clients); do
-                node_num=$(( j % 4 )) # Cycle through nodes 0-3
+                node_num=$(( (j - 1) % 4 )) # Cycle through nodes 0-3
                 node="${HOSTS[$node_num]}"
                 scp append_data.tmp $node:~/append_data.tmp &>/dev/null
-                ssh $node "cd ${REMOTE_DIR}; ./client append sdfs_merge_test ~/append_data.tmp" &
+                ssh $node "cd ${REMOTE_DIR}; ./client -cmd append ~/append_data.tmp sdfs_merge_test" &
                 pids+=($!)
             done
 
@@ -56,14 +56,13 @@ for append_size in "${APPEND_SIZES[@]}"; do
 
             # 4. Measure merge time
             start_time=$(date +%s%N)
-            ./client merge sdfs_merge_test &>/dev/null
+            ./client -cmd merge sdfs_merge_test &>/dev/null
             end_time=$(date +%s%N)
 
             elapsed_time=$((($end_time - $start_time) / 1000000)) # in milliseconds
             total_time=$(($total_time + $elapsed_time))
 
-            # 5. Clean up
-            ./client delete sdfs_merge_test &>/dev/null
+            # 5. Note: No delete command - file will remain, but will be overwritten in next iteration
             sleep 2
         done
 

@@ -32,7 +32,7 @@ for append_size in "${APPEND_SIZES[@]}"; do
         for i in $(seq 1 $NUM_READINGS); do
             # 1. Create and put the initial file
             dd if=/dev/urandom of=initial_file.tmp bs=$INITIAL_FILE_SIZE count=1 &>/dev/null
-            ./client put initial_file.tmp sdfs_sub_merge_test &>/dev/null
+            ./client -cmd create initial_file.tmp sdfs_sub_merge_test &>/dev/null
             rm initial_file.tmp
 
             # 2. Create the data to be appended
@@ -41,10 +41,10 @@ for append_size in "${APPEND_SIZES[@]}"; do
             # 3. Perform concurrent appends
             pids=()
             for j in $(seq 1 $num_clients); do
-                node_num=$(( j % 4 ))
+                node_num=$(( (j - 1) % 4 ))
                 node="${HOSTS[$node_num]}"
                 scp append_data.tmp $node:~/append_data.tmp &>/dev/null
-                ssh $node "cd ${REMOTE_DIR}; ./client append sdfs_sub_merge_test ~/append_data.tmp" &
+                ssh $node "cd ${REMOTE_DIR}; ./client -cmd append ~/append_data.tmp sdfs_sub_merge_test" &
                 pids+=($!)
             done
 
@@ -56,20 +56,19 @@ for append_size in "${APPEND_SIZES[@]}"; do
 
             # 4. First merge
             start_time1=$(date +%s%N)
-            ./client merge sdfs_sub_merge_test &>/dev/null
+            ./client -cmd merge sdfs_sub_merge_test &>/dev/null
             end_time1=$(date +%s%N)
             elapsed_time1=$((($end_time1 - $start_time1) / 1000000))
             total_time1=$(($total_time1 + $elapsed_time1))
 
             # 5. Second merge
             start_time2=$(date +%s%N)
-            ./client merge sdfs_sub_merge_test &>/dev/null
+            ./client -cmd merge sdfs_sub_merge_test &>/dev/null
             end_time2=$(date +%s%N)
             elapsed_time2=$((($end_time2 - $start_time2) / 1000000))
             total_time2=$(($total_time2 + $elapsed_time2))
 
-            # 6. Clean up
-            ./client delete sdfs_sub_merge_test &>/dev/null
+            # 6. Note: No delete command - file will remain, but will be overwritten in next iteration
             sleep 2
         done
 

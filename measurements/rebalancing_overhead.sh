@@ -29,7 +29,7 @@ for count in "${FILE_COUNTS[@]}"; do
     echo "Preloading $count files..."
     for i in $(seq 1 $count); do
         dd if=/dev/urandom of=testfile.tmp bs=$FILE_SIZE count=1 &>/dev/null
-        ./client put testfile.tmp sdfs_testfile_rebalance_${count}_${i} &>/dev/null
+        ./client -cmd create testfile.tmp sdfs_testfile_rebalance_${count}_${i} &>/dev/null
     done
     rm testfile.tmp
     echo "Preload complete."
@@ -54,16 +54,11 @@ for count in "${FILE_COUNTS[@]}"; do
 
     # Stop the 4th node to reset for the next run
     echo "Stopping node ${NODE_TO_ADD}..."
-    ssh "${NODE_TO_ADD}" "pkill -f client
-    "
+    ssh "${NODE_TO_ADD}" "pkill -f client"
     sleep 5
 
-    # Clean up the files from SDFS
-    echo "Cleaning up SDFS files..."
-    for i in $(seq 1 $count); do
-        ./client delete sdfs_testfile_rebalance_${count}_${i} &>/dev/null
-    done
-    echo "Cleanup complete."
+    # Note: No delete command available - files will remain in HyDFS
+    # You may need to manually clean up or restart the cluster between runs
 
 done
 

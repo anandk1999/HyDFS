@@ -30,7 +30,7 @@ for size in "${FILE_SIZES[@]}"; do
     echo "Preloading 100 files of size $size..."
     for i in $(seq 1 $NUM_FILES); do
         dd if=/dev/urandom of=testfile.tmp bs=$size count=1 &>/dev/null
-        ./client put testfile.tmp sdfs_testfile_${size}_${i} &>/dev/null
+        ./client -cmd create testfile.tmp sdfs_testfile_${size}_${i} &>/dev/null
     done
     rm testfile.tmp
     echo "Preload complete."
@@ -66,7 +66,7 @@ for size in "${FILE_SIZES[@]}"; do
         
         # Count the number of node addresses in the output (lines with :8080)
         echo "$ls_output"
-        replica_count=$(echo "$ls_output" | grep -c ":808" 2>/dev/null || echo "0")
+        replica_count=$(echo "$ls_output" | grep -c "RingID:" 2>/dev/null || echo "0")
         
         # If we see 3 replicas for our test file, re-replication is likely complete
         if [ "$replica_count" -eq 3 ] 2>/dev/null; then
