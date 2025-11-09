@@ -8,7 +8,7 @@ set -euo pipefail
 HYDFSFILE=${1:-}
 shift || true
 KILL_VMS=("$@")
-CLIENT="/home/pnj2/mp3-g02/client"
+CLIENT="/home/saik2/mp3-g02/client"
 WAIT_AFTER_KILL=20   # seconds to wait for re-replication
 
 if [[ -z "$HYDFSFILE" || ${#KILL_VMS[@]} -eq 0 ]]; then
@@ -37,9 +37,9 @@ SURVIVING_VM=localhost
 
 echo "\n== After failures: list_mem_ids on $SURVIVING_VM =="
 if [[ "$SURVIVING_VM" == "localhost" ]]; then
-  cd /home/pnj2/mp3-g02 && $CLIENT -cmd list_mem_ids
+  cd /home/saik2/mp3-g02 && $CLIENT -cmd list_mem_ids
 else
-  ssh "$SURVIVING_VM" "cd /home/pnj2/mp3-g02 && $CLIENT -cmd list_mem_ids"
+  ssh "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd list_mem_ids"
 fi
 
 echo "\n== ls (replicas) for $HYDFSFILE on $SURVIVING_VM =="

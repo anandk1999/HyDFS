@@ -10,7 +10,7 @@ HYDFSFILE=${2:-}
 LOCAL1=${3:-}
 LOCAL2=${4:-}
 FILE_NAME="RandomFile1"
-CLIENT="/home/pnj2/mp3-g02/cmd/logquery/client"
+CLIENT="/home/saik2/mp3-g02/cmd/logquery/client"
 TMP_OUT="/tmp/hy_get_after_appends"
 
 if [[ -z "$HYDFSFILE" || -z "$LOCAL1" || -z "$LOCAL2" ]]; then
@@ -22,9 +22,9 @@ fi
 run_on() {
   local host="$1"; shift
   if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
-    (cd /home/pnj2/mp3-g02 && "$@")
+    (cd /home/saik2/mp3-g02 && "$@")
   else
-    ssh "$host" "cd /home/pnj2/mp3-g02 && $*"
+    ssh "$host" "cd /home/saik2/mp3-g02 && $*"
   fi
 }
 

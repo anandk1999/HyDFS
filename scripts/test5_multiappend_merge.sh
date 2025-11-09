@@ -10,7 +10,7 @@ INITIATOR=${1:-localhost}
 HYDFSFILE=${2:-}
 shift 2 || true
 PAIRS=($@)
-CLIENT="/home/pnj2/mp3-g02/cmd/logquery/client"
+CLIENT="/home/saik2/mp3-g02/cmd/logquery/client"
 
 if [[ -z "$HYDFSFILE" || ${#PAIRS[@]} -lt 2 || $((${#PAIRS[@]} % 2)) -ne 0 ]]; then
   echo "Usage: $0 INITIATOR_VM HYDFSFILE VM1 LOCAL1 [VM2 LOCAL2 ...]"
@@ -29,7 +29,7 @@ if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
   $CLIENT -cmd multiappend "${MULTIARGS[@]}"
 else
   echo "Launching multiappend from $INITIATOR"
-  ssh "$INITIATOR" "cd /home/pnj2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
+  ssh "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
 fi
 
 # Step 2: Wait a little for appends to propagate
@@ -40,7 +40,7 @@ echo "\n== Running merge on $INITIATOR =="
 if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
   $CLIENT -cmd merge "$HYDFSFILE"
 else
-  ssh "$INITIATOR" "cd /home/pnj2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
+  ssh "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
 fi
 
 # Step 4: Fetch file from two replicas (ask TA to pick two replica VMs) and compare

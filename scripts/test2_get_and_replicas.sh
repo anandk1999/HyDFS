@@ -20,9 +20,9 @@ fi
 echo "== Test 2a: GET file from HyDFS (reader: $READER_VM) =="
 # fetch from reader VM (client will write to OUTFILE on the reader)
 if [[ "$READER_VM" == "localhost" || "$READER_VM" == "127.0.0.1" ]]; then
-  cd /home/pnj2/mp3-g02 && $CLIENT -cmd get "$HYDFSFILE" "$OUTFILE"
+  cd /home/saik2/mp3-g02 && $CLIENT -cmd get "$HYDFSFILE" "$OUTFILE"
 else
-  ssh "$READER_VM" "cd /home/pnj2/mp3-g02 && $CLIENT -cmd get '$HYDFSFILE' '$OUTFILE'"
+  ssh "$READER_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd get '$HYDFSFILE' '$OUTFILE'"
 fi
 
 # Compare with local dataset copy on the reader VM
@@ -31,7 +31,7 @@ LOCAL_COPY_PATH="$LOCAL_DATA_DIR/${HYDFSFILE#demo_}"  # assumes hydfs filename c
 if [[ "$READER_VM" == "localhost" || "$READER_VM" == "127.0.0.1" ]]; then
   diff -q "$LOCAL_COPY_PATH" "$OUTFILE" && echo "Files are identical" || (echo "Files differ"; exit 1)
 else
-  ssh "$READER_VM" "cd /home/pnj2/mp3-g02 && diff -q '$LOCAL_COPY_PATH' '$OUTFILE' && echo 'Files are identical' || (echo 'Files differ'; exit 1)"
+  ssh "$READER_VM" "cd /home/saik2/mp3-g02 && diff -q '$LOCAL_COPY_PATH' '$OUTFILE' && echo 'Files are identical' || (echo 'Files differ'; exit 1)"
 fi
 
 # Test 2b: show replicas on ring and membership (ls + list_mem_ids)

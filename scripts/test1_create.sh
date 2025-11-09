@@ -7,8 +7,8 @@ set -euo pipefail
 
 # === Config ===
 WRITER_VM=${1:-"localhost"}   # hostname[:port] or localhost
-CLIENT="/home/pnj2/mp3-g02/client"  # full path to the client binary
-DATA_DIR="/home/pnj2/mp3-g02/business" # path on each VM where business_[1-20] are located
+CLIENT="./home/saik2/mp3-g02/client"  # full path to the client binary
+DATA_DIR="/home/saik2/mp3-g02/business" # path on each VM where business_[1-20] are located
 FILES=("business_1.txt" "business_2.txt" "business_3.txt" "business_4.txt" "business_5.txt")
 HYDFS_PREFIX="demo_"           # prefix to use for HyDFS filenames
 SLEEP_AFTER_CREATE=3
@@ -17,9 +17,9 @@ SLEEP_AFTER_CREATE=3
 run_on() {
   local host="$1"; shift
   if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
-    (cd $(pwd) && "$@")
+    (cd "$(pwd)" && "$@")
   else
-    ssh "$host" "cd /home/pnj2/mp3-g02 && $*"
+    ssh "$host" "cd /home/saik2/mp3-g02 && ./client && $*"
   fi
 }
 
