@@ -44,13 +44,13 @@ LOCAL1="./business/business_${BUSINESS_NUM1}.txt"
 LOCAL2="./business/business_${BUSINESS_NUM2}.txt"
 
 # Validate business files exist
-if [[ ! -f "$SCRIPT_DIR/$LOCAL1" ]]; then
-  echo "Error: Business file not found: $SCRIPT_DIR/$LOCAL1"
+if [[ ! -f "$LOCAL1" ]]; then
+  echo "Error: Business file not found: $LOCAL1"
   exit 1
 fi
 
-if [[ ! -f "$SCRIPT_DIR/$LOCAL2" ]]; then
-  echo "Error: Business file not found: $SCRIPT_DIR/$LOCAL2"
+if [[ ! -f "$LOCAL2" ]]; then
+  echo "Error: Business file not found: $LOCAL2"
   exit 1
 fi
 
