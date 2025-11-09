@@ -40,8 +40,8 @@ if [[ "$VM_NUM" -lt 1 || "$VM_NUM" -gt "${#HOSTS[@]}" ]]; then
 fi
 
 CLIENT_VM="${HOSTS[$((VM_NUM - 1))]}"
-LOCAL1="./business/business_${BUSINESS_NUM1}.txt"
-LOCAL2="./business/business_${BUSINESS_NUM2}.txt"
+LOCAL1="/home/saik2/mp3-g02/business/business_${BUSINESS_NUM1}.txt"
+LOCAL2="/home/saik2/mp3-g02/business/business_${BUSINESS_NUM2}.txt"
 
 # Validate business files exist
 if [[ ! -f "$LOCAL1" ]]; then
@@ -81,25 +81,18 @@ fi
 
 # Grep for snippets from local files to demonstrate ordering
 echo "\n---- Search for markers from the appended files ----"
-if [[ "$CLIENT_VM" == "localhost" ]]; then
-  echo "Occurrences from $LOCAL1:"
-  grep -n "$(head -n 1 "$LOCAL1" | sed 's/\//\\\//g')" "$TMP_OUT" || true
-  echo "Occurrences from $LOCAL2:"
-  grep -n "$(head -n 1 "$LOCAL2" | sed 's/\//\\\//g')" "$TMP_OUT" || true
-else
-  # On remote, copy result locally for convenience
-  scp -o LogLevel=ERROR "$CLIENT_VM:$TMP_OUT" "/tmp/hy_get_after_appends.$CLIENT_VM"
-  echo "Occurrences from $LOCAL1:"
-  grep -n "$(ssh -o LogLevel=ERROR "$CLIENT_VM" "head -n 1 '$LOCAL1' | sed 's/\//\\\\\//g'")" "/tmp/hy_get_after_appends.$CLIENT_VM" || true
-fi
+# On remote, copy result locally for convenience
+scp -o LogLevel=ERROR "$CLIENT_VM:$TMP_OUT" "/tmp/hy_get_after_appends.$CLIENT_VM"
+echo "Occurrences from business_${BUSINESS_NUM1}.txt:"
+sample1=$(head -n 1 "$SCRIPT_DIR/../business/business_${BUSINESS_NUM1}.txt")
+grep -nF "$sample1" "/tmp/hy_get_after_appends.$CLIENT_VM" || true
+echo "Occurrences from business_${BUSINESS_NUM2}.txt:"
+sample2=$(head -n 1 "$SCRIPT_DIR/../business/business_${BUSINESS_NUM2}.txt")
+grep -nF "$sample2" "/tmp/hy_get_after_appends.$CLIENT_VM" || true
 
 # Optionally print the file tail for visual ordering
-if [[ "$CLIENT_VM" == "localhost" ]]; then
-  echo "\n--- tail of fetched file ---"
-  tail -n 200 "$TMP_OUT"
-else
-  ssh -o LogLevel=ERROR "$CLIENT_VM" "tail -n 200 /tmp/hy_get_after_appends"
-fi
+echo "\n--- tail of fetched file ---"
+tail -n 200 "/tmp/hy_get_after_appends.$CLIENT_VM"
 
 echo "\n== Test 4 completed =="
 exit 0
