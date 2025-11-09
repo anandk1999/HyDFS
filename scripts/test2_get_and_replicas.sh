@@ -9,7 +9,7 @@ HYDFSFILE=${1:-}
 WRITER_VM=${2:-localhost}
 READER_VM=${3:-localhost}
 CLIENT="./client"
-LOCAL_DATA_DIR="./home/saik2/business"
+LOCAL_DATA_DIR="./home/saik2/mp3-g02/business"
 OUTFILE="/tmp/hy_get_out"
 
 if [[ -z "$HYDFSFILE" ]]; then

@@ -10,7 +10,7 @@ HYDFSFILE=${2:-}
 LOCAL1=${3:-}
 LOCAL2=${4:-}
 FILE_NAME="RandomFile1"
-CLIENT="./home/saik2/mp3-g02/client"
+CLIENT="./client"
 TMP_OUT="/tmp/hy_get_after_appends"
 
 if [[ -z "$HYDFSFILE" || -z "$LOCAL1" || -z "$LOCAL2" ]]; then

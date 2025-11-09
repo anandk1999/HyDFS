@@ -10,7 +10,7 @@ INITIATOR=${1:-localhost}
 HYDFSFILE=${2:-}
 shift 2 || true
 PAIRS=($@)
-CLIENT="./home/saik2/mp3-g02/client"
+CLIENT="./client"
 
 if [[ -z "$HYDFSFILE" || ${#PAIRS[@]} -lt 2 || $((${#PAIRS[@]} % 2)) -ne 0 ]]; then
   echo "Usage: $0 INITIATOR_VM HYDFSFILE VM1 LOCAL1 [VM2 LOCAL2 ...]"
