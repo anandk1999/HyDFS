@@ -40,8 +40,8 @@ if [[ "$VM_NUM" -lt 1 || "$VM_NUM" -gt "${#HOSTS[@]}" ]]; then
 fi
 
 CLIENT_VM="${HOSTS[$((VM_NUM - 1))]}"
-LOCAL1="../business/business_${BUSINESS_NUM1}.txt"
-LOCAL2="../business/business_${BUSINESS_NUM2}.txt"
+LOCAL1="./business/business_${BUSINESS_NUM1}.txt"
+LOCAL2="./business/business_${BUSINESS_NUM2}.txt"
 
 # Validate business files exist
 if [[ ! -f "$SCRIPT_DIR/$LOCAL1" ]]; then
