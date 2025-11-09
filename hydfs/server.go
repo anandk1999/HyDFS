@@ -171,12 +171,9 @@ func (s *Server) performBackgroundMerge(fileID, filename string, replicas []util
 		mergedBlocks = append(mergedBlocks, block)
 	}
 
-	// Sort by (ClientID, Timestamp) to preserve per-client ordering
+	// Sort purely by timestamp to maintain temporal ordering across all clients
 	sort.SliceStable(mergedBlocks, func(i, j int) bool {
-		if mergedBlocks[i].ClientID == mergedBlocks[j].ClientID {
-			return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
-		}
-		return mergedBlocks[i].ClientID < mergedBlocks[j].ClientID
+		return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
 	})
 
 	goldenMeta := &Metadata{
@@ -549,12 +546,9 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 		mergedBlocks = append(mergedBlocks, block)
 	}
 
-	//    c. Sort to satisfy per-client append ordering
+	//    c. Sort purely by timestamp to maintain temporal ordering across all clients
 	sort.SliceStable(mergedBlocks, func(i, j int) bool {
-		if mergedBlocks[i].ClientID == mergedBlocks[j].ClientID {
-			return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
-		}
-		return mergedBlocks[i].ClientID < mergedBlocks[j].ClientID
+		return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
 	})
 
 	goldenMeta := &Metadata{
