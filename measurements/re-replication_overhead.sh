@@ -59,16 +59,17 @@ for size in "${FILE_SIZES[@]}"; do
     elapsed=0
     
     while [ $elapsed -lt $MAX_WAIT ]; do
-        # Check if re-replication is complete by listing files and checking replica counts
-        # This assumes your HyDFS ls command shows replica counts
-        replica_check=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; echo 'ls' | ./client -control-port 18080 -cmd" 2>/dev/null | grep -c "3 replicas" 2>/dev/null || echo "0")
+        # Check if re-replication is complete by checking one of the files
+        # The ls command should show 3 replica node addresses
+        test_file="sdfs_testfile_${size}_1"
+        ls_output=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; ./client -control-port 18080 -cmd ls ${test_file}" 2>/dev/null)
         
-        # Clean up the output - remove any newlines/whitespace
-        replica_check=$(echo "$replica_check" | tr -d '\n' | tr -d ' ')
+        # Count the number of node addresses in the output (lines with :8080)
+        replica_count=$(echo "$ls_output" | grep -c ":8080" 2>/dev/null || echo "0")
         
-        # If we have 100 files with 3 replicas each, re-replication is complete
-        if [ "$replica_check" -ge 100 ] 2>/dev/null; then
-            echo "Re-replication complete! All files restored to 3 replicas."
+        # If we see 3 replicas for our test file, re-replication is likely complete
+        if [ "$replica_count" -eq 3 ] 2>/dev/null; then
+            echo "Re-replication complete! Test file has 3 replicas."
             break
         fi
         
