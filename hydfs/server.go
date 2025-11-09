@@ -155,31 +155,17 @@ func (s *Server) performBackgroundMerge(fileID, filename string, replicas []util
 		return
 	}
 
-	// Collect all unique blocks from all metadata versions
-	uniqueBlocks := make(map[string]BlockInfo)
+	metas := make([]*Metadata, 0, len(metaResponses))
 	for _, resp := range metaResponses {
 		if resp.Meta != nil {
-			for _, block := range resp.Meta.Blocks {
-				uniqueBlocks[block.BlockID] = block
-			}
+			metas = append(metas, resp.Meta)
 		}
 	}
 
-	// Create merged list
-	mergedBlocks := make([]BlockInfo, 0, len(uniqueBlocks))
-	for _, block := range uniqueBlocks {
-		mergedBlocks = append(mergedBlocks, block)
-	}
-
-	// Sort purely by timestamp to maintain temporal ordering across all clients
-	sort.SliceStable(mergedBlocks, func(i, j int) bool {
-		return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
-	})
-
-	goldenMeta := &Metadata{
-		FileID:   fileID,
-		Filename: filename,
-		Blocks:   mergedBlocks,
+	goldenMeta := s.buildGoldenMetadata(fileID, filename, metas)
+	if goldenMeta == nil {
+		log.Printf("[BackgroundMerge] Failed to build golden metadata for file %s (%s)", fileID, filename)
+		return
 	}
 
 	// Compare each replica's metadata against the golden version
@@ -532,29 +518,11 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Perform merge logic
-	//    a. Collect all unique blocks from all metadata versions
-	uniqueBlocks := make(map[string]BlockInfo)
-	for _, meta := range allMetas {
-		for _, block := range meta.Blocks {
-			uniqueBlocks[block.BlockID] = block
-		}
-	}
-	//    b. Create a list of all unique blocks
-	mergedBlocks := make([]BlockInfo, 0, len(uniqueBlocks))
-	for _, block := range uniqueBlocks {
-		mergedBlocks = append(mergedBlocks, block)
-	}
-
-	//    c. Sort purely by timestamp to maintain temporal ordering across all clients
-	sort.SliceStable(mergedBlocks, func(i, j int) bool {
-		return mergedBlocks[i].Timestamp < mergedBlocks[j].Timestamp
-	})
-
-	goldenMeta := &Metadata{
-		FileID:   fileID,
-		Filename: hydfsFilename,
-		Blocks:   mergedBlocks,
+	// 3. Build a "golden" metadata that preserves the sequential portion seen by the most up-to-date replica
+	goldenMeta := s.buildGoldenMetadata(fileID, hydfsFilename, allMetas)
+	if goldenMeta == nil {
+		http.Error(w, "Failed to build merged metadata", http.StatusInternalServerError)
+		return
 	}
 
 	// 4. Propagate "golden" metadata to ALL replicas
@@ -932,14 +900,91 @@ func (s *Server) findWinningMetadata(allMetas []*Metadata) *Metadata {
 		return nil
 	}
 	// Winner is the one with the most blocks.
-	// A more robust system might use vector clocks.
+	// Use earliest last timestamp as a tiebreaker for deterministic selection.
 	winner := allMetas[0]
 	for _, meta := range allMetas[1:] {
 		if len(meta.Blocks) > len(winner.Blocks) {
 			winner = meta
+			continue
+		}
+		if len(meta.Blocks) == len(winner.Blocks) && len(meta.Blocks) > 0 {
+			winnerLast := winner.Blocks[len(winner.Blocks)-1].Timestamp
+			metaLast := meta.Blocks[len(meta.Blocks)-1].Timestamp
+			if metaLast < winnerLast {
+				winner = meta
+			}
 		}
 	}
 	return winner
+}
+
+// buildGoldenMetadata merges multiple metadata versions while preserving the sequential order
+// observed by the most up-to-date replica. Blocks unseen in that replica are appended later
+// but still sorted deterministically via timestamps. This keeps pre-concurrency appends (create,
+// sequential append) in their original order even when other replicas have clock skew.
+func (s *Server) buildGoldenMetadata(fileID, filename string, metas []*Metadata) *Metadata {
+	filtered := make([]*Metadata, 0, len(metas))
+	for _, meta := range metas {
+		if meta != nil {
+			filtered = append(filtered, meta)
+			if filename == "" && meta.Filename != "" {
+				filename = meta.Filename
+			}
+		}
+	}
+
+	if len(filtered) == 0 {
+		return &Metadata{FileID: fileID, Filename: filename}
+	}
+
+	baseMeta := s.findWinningMetadata(filtered)
+	baseOrder := make(map[string]int, len(baseMeta.Blocks))
+	for idx, block := range baseMeta.Blocks {
+		baseOrder[block.BlockID] = idx
+	}
+
+	uniqueBlocks := make(map[string]BlockInfo)
+	for _, meta := range filtered {
+		for _, block := range meta.Blocks {
+			uniqueBlocks[block.BlockID] = block
+		}
+	}
+
+	type blockAggregate struct {
+		info    BlockInfo
+		basePos int
+	}
+
+	const fallbackPos = int(^uint(0) >> 1)
+	aggregates := make([]blockAggregate, 0, len(uniqueBlocks))
+	for _, block := range uniqueBlocks {
+		pos := fallbackPos
+		if idx, ok := baseOrder[block.BlockID]; ok {
+			pos = idx
+		}
+		aggregates = append(aggregates, blockAggregate{info: block, basePos: pos})
+	}
+
+	sort.SliceStable(aggregates, func(i, j int) bool {
+		if aggregates[i].basePos != aggregates[j].basePos {
+			return aggregates[i].basePos < aggregates[j].basePos
+		}
+		if aggregates[i].info.Timestamp != aggregates[j].info.Timestamp {
+			return aggregates[i].info.Timestamp < aggregates[j].info.Timestamp
+		}
+		return aggregates[i].info.BlockID < aggregates[j].info.BlockID
+	})
+
+	mergedBlocks := make([]BlockInfo, len(aggregates))
+	for idx, agg := range aggregates {
+		mergedBlocks[idx] = agg.info
+	}
+
+	return &Metadata{
+		FileID:   fileID,
+		Filename: filename,
+		Blocks:   mergedBlocks,
+	}
 }
 
 // dispatchWriteMetas fans out a "golden" metadata to all replicas (for merge/read-repair)
