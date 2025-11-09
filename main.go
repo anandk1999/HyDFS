@@ -666,12 +666,10 @@ func runClient(cmd string, controlPort int, args []string) {
 					vmHost = vm[:strings.Index(vm, ":")]
 				}
 
-				// SSH to the VM and run the client append command there
-				sshCmd := exec.Command("ssh", vmHost,
-					fmt.Sprintf("cd mp3-g02 && ./client -cmd append %s %s",
-						lfile, hydfsFilename))
-
-				output, err := sshCmd.CombinedOutput()
+			// SSH to the VM and run the client append command there
+			sshCmd := exec.Command("ssh", "-o", "LogLevel=ERROR", vmHost,
+				fmt.Sprintf("cd mp3-g02 && ./client -cmd append %s %s",
+					lfile, hydfsFilename))				output, err := sshCmd.CombinedOutput()
 				if err != nil {
 					log.Printf("ERROR from %s: %v\nOutput: %s", vm, err, string(output))
 				} else {

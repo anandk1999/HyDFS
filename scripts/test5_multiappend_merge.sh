@@ -18,10 +18,19 @@ CLIENT="./client"
 if [[ -z "$INITIATOR_VM_NUM" || -z "$HYDFSFILE" || ${#PAIRS[@]} -lt 2 || $((${#PAIRS[@]} % 2)) -ne 0 ]]; then
   echo "Usage: $0 INITIATOR_VM_NUM HYDFSFILE VM_NUM1 BUSINESS_NUM1 [VM_NUM2 BUSINESS_NUM2 ...]"
   echo "Example: $0 1 demo_foo.txt 1 5 2 10 3 15 4 20"
+  echo "  This example uses 4 VMs appending 4 different business files:"
+  echo "    - VM 1 appends business_5.txt"
+  echo "    - VM 2 appends business_10.txt"
+  echo "    - VM 3 appends business_15.txt"
+  echo "    - VM 4 appends business_20.txt"
+  echo ""
+  echo "Parameters:"
   echo "  INITIATOR_VM_NUM: VM number (1-10) to initiate multiappend from"
   echo "  HYDFSFILE: HyDFS filename"
-  echo "  VM_NUM: VM number (1-10) to append from"
-  echo "  BUSINESS_NUM: Business file number (e.g., 5 for business_5.txt)"
+  echo "  Pairs of: VM_NUM (1-10) BUSINESS_NUM (file number)"
+  echo ""
+  echo "Your command: $0 $*"
+  echo "Pairs detected: ${#PAIRS[@]} arguments (${#PAIRS[@]}/2 = $((${#PAIRS[@]}/2)) pairs)"
   exit 2
 fi
 
@@ -60,7 +69,7 @@ for ((i=0; i<$NUM_PAIRS; i++)); do
   fi
   
   vm_host="${HOSTS[$((vm_num - 1))]}"
-  business_file="~/business/business_${business_num}.txt"
+  business_file="/home/saik2/mp3-g02/business/business_${business_num}.txt"
   
   # Validate business file exists locally (checking if it's in the repo)
   if [[ ! -f "$SCRIPT_DIR/../business/business_${business_num}.txt" ]]; then
