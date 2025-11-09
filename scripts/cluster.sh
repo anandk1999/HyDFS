@@ -231,11 +231,11 @@ case "$COMMAND" in
         fi
 
         # Get introducer address
-        INTRODUCER_HOST=${HOSTS[1]}
+        INTRODUCER_HOST=${HOSTS[0]}
         INTRODUCER_IP=$(ssh "${REMOTE_USER}@${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
         INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
 
-    TARGET_HOST=$(sed -n "${VM_INDEX}p" "${HOSTS_FILE}")
+        TARGET_HOST=${HOSTS[$((VM_INDEX - 1))]}
         port=$((8080 + VM_INDEX - 1))
         cport=$((18080))
 

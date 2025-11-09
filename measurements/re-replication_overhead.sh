@@ -40,8 +40,8 @@ for size in "${FILE_SIZES[@]}"; do
     ssh "${NODE_TO_KILL}" "pkill -f client" &
 
     # 3. Measure re-replication time and bandwidth
-    # Start measuring bandwidth
-    ifstat -T -n > $OUTPUT_DIR/bandwidth_${size}.log &
+    # Start measuring bandwidth (sample every 1 second)
+    ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${size}.log &
     ifstat_pid=$!
 
     start_time=$(date +%s%N)
@@ -55,7 +55,7 @@ for size in "${FILE_SIZES[@]}"; do
     end_time=$(date +%s%N)
     
     # Stop measuring bandwidth
-    kill $ifstat_pid
+    kill $ifstat_pid 2>/dev/null || true
 
     elapsed_time=$((($end_time - $start_time) / 1000000)) # in milliseconds
     echo "Re-replication time for file size $size: $elapsed_time ms" > $OUTPUT_DIR/time_${size}.log

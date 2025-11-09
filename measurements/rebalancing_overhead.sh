@@ -38,8 +38,8 @@ for count in "${FILE_COUNTS[@]}"; do
     echo "Starting node ${NODE_TO_ADD} to trigger rebalancing..."
     ssh "${NODE_TO_ADD}" "cd ${REMOTE_DIR}; ./client" &
     
-    # 3. Measure bandwidth
-    ifstat -T -n > $OUTPUT_DIR/bandwidth_${count}.log &
+    # 3. Measure bandwidth (sample every 1 second)
+    ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${count}.log &
     ifstat_pid=$!
 
     # Wait for rebalancing to complete.
@@ -48,7 +48,7 @@ for count in "${FILE_COUNTS[@]}"; do
     sleep 60 # Adjust as needed
 
     # Stop measuring bandwidth
-    kill $ifstat_pid
+    kill $ifstat_pid 2>/dev/null || true
 
     echo "Measurement for $count files complete."
 
