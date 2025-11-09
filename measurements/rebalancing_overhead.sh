@@ -60,8 +60,6 @@ for count in "${FILE_COUNTS[@]}"; do
     
     # 3. Measure bandwidth (sample every 1 second)
     # Kill any existing ifstat processes first
-    pkill -f ifstat 2>/dev/null || true
-    sleep 1
     
     ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${count}.log &
     ifstat_pid=$!
