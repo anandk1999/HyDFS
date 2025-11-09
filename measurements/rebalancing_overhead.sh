@@ -84,14 +84,19 @@ for count in "${FILE_COUNTS[@]}"; do
         files_on_node4=$(ssh "${NODE_TO_ADD}" "
             cd mp3-g02
             ./client -cmd liststore 2>/dev/null | grep -c 'rebal_file_' || echo 0
-        " 2>/dev/null)
+        " 2>/dev/null | tr -d '\n' | tr -d ' ')
+        
+        # Default to 0 if empty or invalid
+        if [ -z "$files_on_node4" ]; then
+            files_on_node4=0
+        fi
         
         echo "  [${elapsed}s] Node 4 has $files_on_node4 files"
         
         # Expect roughly 25% of files on node 4 (could vary due to hashing)
         expected_min=$((count / 5))  # At least 20% 
         
-        if [ "$files_on_node4" -ge "$expected_min" ]; then
+        if [ "$files_on_node4" -ge "$expected_min" ] 2>/dev/null; then
             echo "  ✓ Rebalancing appears complete!"
             break
         fi
