@@ -29,7 +29,7 @@ if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
   $CLIENT -cmd multiappend "${MULTIARGS[@]}"
 else
   echo "Launching multiappend from $INITIATOR"
-  ssh "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
+  ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
 fi
 
 # Step 2: Wait a little for appends to propagate
@@ -40,7 +40,7 @@ echo "\n== Running merge on $INITIATOR =="
 if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
   $CLIENT -cmd merge "$HYDFSFILE"
 else
-  ssh "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
+  ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
 fi
 
 # Step 4: Fetch file from two replicas (ask TA to pick two replica VMs) and compare
@@ -78,7 +78,7 @@ for ((i=1;i<=$NUM_PAIRS;i++)); do
   idx=$(( (i-1)*2 + 1 ))
   vm=${PAIRS[$((idx-1))]}
   localfile=${PAIRS[$idx]}
-  sample=$(ssh ${vm%%:*} "head -n 1 '$localfile'" 2>/dev/null || head -n 1 "$localfile")
+  sample=$(ssh -o LogLevel=ERROR ${vm%%:*} "head -n 1 '$localfile'" 2>/dev/null || head -n 1 "$localfile")
   echo "Looking for sample from $localfile: '$sample'"
   grep -nF "$sample" "$OUT_A" || true
 done

@@ -24,7 +24,7 @@ run_on() {
   if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
     (cd /home/saik2/mp3-g02 && eval "$@")
   else
-    ssh "$host" "cd /home/saik2/mp3-g02 && $*"
+    ssh -o LogLevel=ERROR "$host" "cd /home/saik2/mp3-g02 && $*"
   fi
 }
 
@@ -40,7 +40,7 @@ echo "\n== Fetching file to verify read-my-writes and ordering =="
 if [[ "$CLIENT_VM" == "localhost" ]]; then
   $CLIENT -cmd get "$HYDFSFILE" "$TMP_OUT"
 else
-  ssh "$CLIENT_VM" "cd $(pwd) && $CLIENT -cmd get '$HYDFSFILE' '$TMP_OUT'"
+  ssh -o LogLevel=ERROR "$CLIENT_VM" "cd $(pwd) && $CLIENT -cmd get '$HYDFSFILE' '$TMP_OUT'"
 fi
 
 # Grep for snippets from local files to demonstrate ordering
@@ -52,9 +52,9 @@ if [[ "$CLIENT_VM" == "localhost" ]]; then
   grep -n "$(head -n 1 "$LOCAL2" | sed 's/\//\\\//g')" "$TMP_OUT" || true
 else
   # On remote, copy result locally for convenience
-  scp "$CLIENT_VM:$TMP_OUT" "/tmp/hy_get_after_appends.$CLIENT_VM"
+  scp -o LogLevel=ERROR "$CLIENT_VM:$TMP_OUT" "/tmp/hy_get_after_appends.$CLIENT_VM"
   echo "Occurrences from $LOCAL1:"
-  grep -n "$(ssh "$CLIENT_VM" "head -n 1 '$LOCAL1' | sed 's/\//\\\\\//g'")" "/tmp/hy_get_after_appends.$CLIENT_VM" || true
+  grep -n "$(ssh -o LogLevel=ERROR "$CLIENT_VM" "head -n 1 '$LOCAL1' | sed 's/\//\\\\\//g'")" "/tmp/hy_get_after_appends.$CLIENT_VM" || true
 fi
 
 # Optionally print the file tail for visual ordering
@@ -62,7 +62,7 @@ if [[ "$CLIENT_VM" == "localhost" ]]; then
   echo "\n--- tail of fetched file ---"
   tail -n 200 "$TMP_OUT"
 else
-  ssh "$CLIENT_VM" "tail -n 200 /tmp/hy_get_after_appends"
+  ssh -o LogLevel=ERROR "$CLIENT_VM" "tail -n 200 /tmp/hy_get_after_appends"
 fi
 
 echo "\n== Test 4 completed =="

@@ -37,7 +37,7 @@ done < "$HOSTS_FILE"
 stop_node() {
   local vm="$1"
   echo "Stopping HyDFS process on $vm"
-  ssh "$vm" "pkill -f mp3-g02 || true; pkill -f main || true; pkill -f client || true" || true
+  ssh -o LogLevel=ERROR "$vm" "pkill -f mp3-g02 || true; pkill -f main || true; pkill -f client || true" || true
 }
 
 # Step 1: Kill the given VMs (convert VM numbers to hostnames)
@@ -62,13 +62,14 @@ SURVIVING_VM="${HOSTS[0]}"
 echo "\n== Using VM 1 ($SURVIVING_VM) as surviving node for queries =="
 
 echo "\n== After failures: list_mem_ids on $SURVIVING_VM =="
-ssh "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd list_mem_ids"
+ssh -o LogLevel=ERROR "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd list_mem_ids"
 
-echo "\n== ls (replicas) for $HYDFSFILE on $SURVIVING_VM =="
-ssh "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd ls '$HYDFSFILE'"
+echo "\n== ls (replicas and FileID hash) for $HYDFSFILE on $SURVIVING_VM =="
+echo "== Compare FileID with ring IDs from list_mem_ids to verify re-replication correctness =="
+ssh -o LogLevel=ERROR "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd ls '$HYDFSFILE'"
 
 echo "\n== liststore on $SURVIVING_VM =="
-ssh "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd liststore"
+ssh -o LogLevel=ERROR "$SURVIVING_VM" "cd /home/saik2/mp3-g02 && $CLIENT -cmd liststore"
 
 echo "\n== Test 3 completed =="
 exit 0

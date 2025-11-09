@@ -19,7 +19,7 @@ run_on() {
   if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
     (cd "/home/saik2/mp3-g02" && eval "$@")
   else
-    ssh "$host" "cd /home/saik2/mp3-g02 && $*"
+    ssh -o LogLevel=ERROR "$host" "cd /home/saik2/mp3-g02 && $*"
   fi
 }
 
