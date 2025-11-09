@@ -91,10 +91,24 @@ sleep 5
 echo "\n== Running merge on VM $INITIATOR_VM_NUM ($INITIATOR) =="
 ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
 
-# Step 4: Fetch file from two replicas and compare
-# Use first two VMs from the pairs
-VM_NUM_A=${PAIRS[0]}
-VM_NUM_B=${PAIRS[2]:-${PAIRS[0]}}
+# Step 4: Get replica VMs from ls command
+echo "\n== Getting replica information =="
+LS_OUTPUT=$(ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd ls '$HYDFSFILE'")
+echo "$LS_OUTPUT"
+
+# Extract the first two replica ports from ls output
+# Format: "  - 172.22.154.6:8082 (RingID: 2781537700)"
+# Port 8080 = VM1, 8081 = VM2, ..., 8089 = VM10
+REPLICA_PORTS=($(echo "$LS_OUTPUT" | grep -E '^\s+-\s+[0-9]+\.' | sed -E 's/.*:([0-9]+).*/\1/' | head -2))
+
+if [[ ${#REPLICA_PORTS[@]} -lt 2 ]]; then
+  echo "Error: Could not extract at least 2 replica ports from ls output"
+  exit 1
+fi
+
+# Convert ports to VM numbers (8080->1, 8081->2, ..., 8089->10)
+VM_NUM_A=$((${REPLICA_PORTS[0]} - 8079))
+VM_NUM_B=$((${REPLICA_PORTS[1]} - 8079))
 
 VM_A="${HOSTS[$((VM_NUM_A - 1))]}"
 VM_B="${HOSTS[$((VM_NUM_B - 1))]}"
