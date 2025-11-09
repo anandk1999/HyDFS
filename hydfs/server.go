@@ -547,12 +547,12 @@ func (s *Server) HandleLs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'hydfsfile' query param", http.StatusBadRequest)
 		return
 	}
-	fileID := s.getFileID(hydfsFilename)
+	fileHashValue := s.ring.Hash(hydfsFilename)
 	log.Printf("[HyDFS] Received /ls for %s", hydfsFilename)
 
 	replicas := s.ring.GetSuccessors(hydfsFilename, 3)
 
-	fmt.Fprintf(w, "File: %s (FileID: %s)\n", hydfsFilename, fileID)
+	fmt.Fprintf(w, "File: %s (FileID: %d)\n", hydfsFilename, fileHashValue)
 	fmt.Fprintln(w, "Replicas (n=3):")
 	for _, replica := range replicas {
 		fmt.Fprintf(w, "  - %s (RingID: %d)\n", replica.Address(), s.ring.Hash(replica.String()))
