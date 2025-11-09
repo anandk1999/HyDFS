@@ -1,72 +1,101 @@
 #!/usr/bin/env bash
 # Test 5: Concurrent appends + merge
-# Usage: ./test5_multiappend_merge.sh INITIATOR_VM HYDFSFILE VM1 LOCAL1 VM2 LOCAL2 VM3 LOCAL3 VM4 LOCAL4
+# Usage: ./test5_multiappend_merge.sh INITIATOR_VM_NUM HYDFSFILE VM_NUM1 BUSINESS_NUM1 [VM_NUM2 BUSINESS_NUM2 ...]
 # Example:
-# ./test5_multiappend_merge.sh vm1 demo_foo.txt vm1 /home/ubuntu/local/a.txt vm2 /home/ubuntu/local/b.txt vm3 /home/ubuntu/local/c.txt vm4 /home/ubuntu/local/d.txt
+# ./test5_multiappend_merge.sh 1 demo_foo.txt 1 5 2 10 3 15 4 20
 
 set -euo pipefail
 
-INITIATOR=${1:-localhost}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOSTS_FILE="$SCRIPT_DIR/../hosts.txt"
+
+INITIATOR_VM_NUM=${1:-}
 HYDFSFILE=${2:-}
 shift 2 || true
 PAIRS=($@)
 CLIENT="./client"
 
-if [[ -z "$HYDFSFILE" || ${#PAIRS[@]} -lt 2 || $((${#PAIRS[@]} % 2)) -ne 0 ]]; then
-  echo "Usage: $0 INITIATOR_VM HYDFSFILE VM1 LOCAL1 [VM2 LOCAL2 ...]"
+if [[ -z "$INITIATOR_VM_NUM" || -z "$HYDFSFILE" || ${#PAIRS[@]} -lt 2 || $((${#PAIRS[@]} % 2)) -ne 0 ]]; then
+  echo "Usage: $0 INITIATOR_VM_NUM HYDFSFILE VM_NUM1 BUSINESS_NUM1 [VM_NUM2 BUSINESS_NUM2 ...]"
+  echo "Example: $0 1 demo_foo.txt 1 5 2 10 3 15 4 20"
+  echo "  INITIATOR_VM_NUM: VM number (1-10) to initiate multiappend from"
+  echo "  HYDFSFILE: HyDFS filename"
+  echo "  VM_NUM: VM number (1-10) to append from"
+  echo "  BUSINESS_NUM: Business file number (e.g., 5 for business_5.txt)"
   exit 2
 fi
 
+# Read hosts from hosts.txt
+if [[ ! -f "$HOSTS_FILE" ]]; then
+  echo "Error: $HOSTS_FILE not found"
+  exit 1
+fi
+
+mapfile -t HOSTS < "$HOSTS_FILE"
+
+# Validate initiator VM number
+if [[ "$INITIATOR_VM_NUM" -lt 1 || "$INITIATOR_VM_NUM" -gt "${#HOSTS[@]}" ]]; then
+  echo "Error: INITIATOR_VM_NUM must be between 1 and ${#HOSTS[@]}"
+  exit 1
+fi
+
+INITIATOR="${HOSTS[$((INITIATOR_VM_NUM - 1))]}"
+
 # Compose multiappend args: hydfsfile vm1 local1 vm2 local2 ...
+# Convert VM numbers to hostnames and business numbers to file paths
 MULTIARGS=("$HYDFSFILE")
-for p in "${PAIRS[@]}"; do
-  MULTIARGS+=("$p")
+NUM_PAIRS=$((${#PAIRS[@]}/2))
+
+for ((i=0; i<$NUM_PAIRS; i++)); do
+  vm_num_idx=$((i*2))
+  business_num_idx=$((i*2 + 1))
+  
+  vm_num=${PAIRS[$vm_num_idx]}
+  business_num=${PAIRS[$business_num_idx]}
+  
+  # Validate VM number
+  if [[ "$vm_num" -lt 1 || "$vm_num" -gt "${#HOSTS[@]}" ]]; then
+    echo "Error: VM_NUM $vm_num must be between 1 and ${#HOSTS[@]}"
+    exit 1
+  fi
+  
+  vm_host="${HOSTS[$((vm_num - 1))]}"
+  business_file="~/business/business_${business_num}.txt"
+  
+  # Validate business file exists locally (checking if it's in the repo)
+  if [[ ! -f "$SCRIPT_DIR/../business/business_${business_num}.txt" ]]; then
+    echo "Error: Business file not found: business/business_${business_num}.txt"
+    exit 1
+  fi
+  
+  MULTIARGS+=("$vm_host" "$business_file")
 done
 
 # Step 1: Run multiappend from initiator (it will ssh out to each VM)
-if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
-  echo "Launching multiappend from local initiator"
-  $CLIENT -cmd multiappend "${MULTIARGS[@]}"
-else
-  echo "Launching multiappend from $INITIATOR"
-  ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
-fi
+echo "Launching multiappend from VM $INITIATOR_VM_NUM ($INITIATOR)"
+ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd multiappend ${MULTIARGS[*]}"
 
 # Step 2: Wait a little for appends to propagate
 sleep 5
 
 # Step 3: Run merge on initiator (or any node)
-echo "\n== Running merge on $INITIATOR =="
-if [[ "$INITIATOR" == "localhost" || "$INITIATOR" == "127.0.0.1" ]]; then
-  $CLIENT -cmd merge "$HYDFSFILE"
-else
-  ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
-fi
+echo "\n== Running merge on VM $INITIATOR_VM_NUM ($INITIATOR) =="
+ssh -o LogLevel=ERROR "$INITIATOR" "cd /home/saik2/mp3-g02 && $CLIENT -cmd merge '$HYDFSFILE'"
 
-# Step 4: Fetch file from two replicas (ask TA to pick two replica VMs) and compare
-# For convenience we will fetch from two VMs supplied as the last pair args (if available)
-NUM_PAIRS=$((${#PAIRS[@]}/2))
-if [[ $NUM_PAIRS -lt 2 ]]; then
-  echo "Warning: less than two appenders specified; still attempting getfromreplica from first two VMs if present"
-fi
+# Step 4: Fetch file from two replicas and compare
+# Use first two VMs from the pairs
+VM_NUM_A=${PAIRS[0]}
+VM_NUM_B=${PAIRS[2]:-${PAIRS[0]}}
 
-VM_A=${PAIRS[0]}
-VM_B=${PAIRS[2]:-${PAIRS[0]}}
+VM_A="${HOSTS[$((VM_NUM_A - 1))]}"
+VM_B="${HOSTS[$((VM_NUM_B - 1))]}"
+
 OUT_A="/tmp/hy_replica_A"
 OUT_B="/tmp/hy_replica_B"
 
-echo "\n== Fetching from replica VM A: $VM_A and VM B: $VM_B =="
-if [[ "$VM_A" == "localhost" || "$VM_A" == "127.0.0.1" ]]; then
-  $CLIENT -cmd getfromreplica "$VM_A" "$HYDFSFILE" "$OUT_A"
-else
-  $CLIENT -cmd getfromreplica "$VM_A" "$HYDFSFILE" "$OUT_A"
-fi
-
-if [[ "$VM_B" == "localhost" || "$VM_B" == "127.0.0.1" ]]; then
-  $CLIENT -cmd getfromreplica "$VM_B" "$HYDFSFILE" "$OUT_B"
-else
-  $CLIENT -cmd getfromreplica "$VM_B" "$HYDFSFILE" "$OUT_B"
-fi
+echo "\n== Fetching from replica VM $VM_NUM_A ($VM_A) and VM $VM_NUM_B ($VM_B) =="
+$CLIENT -cmd getfromreplica "$VM_A" "$HYDFSFILE" "$OUT_A"
+$CLIENT -cmd getfromreplica "$VM_B" "$HYDFSFILE" "$OUT_B"
 
 # Compare the two fetched files
 echo "\n== Comparing the two replica fetches =="
@@ -74,12 +103,16 @@ diff -q "$OUT_A" "$OUT_B" && echo "Replicas are identical" || (echo "Replicas di
 
 # Finally, check contents contain the append markers (grep for known keywords from local files)
 echo "\n== Ensuring no appends lost (simple grep for sample words) =="
-for ((i=1;i<=$NUM_PAIRS;i++)); do
-  idx=$(( (i-1)*2 + 1 ))
-  vm=${PAIRS[$((idx-1))]}
-  localfile=${PAIRS[$idx]}
-  sample=$(ssh -o LogLevel=ERROR ${vm%%:*} "head -n 1 '$localfile'" 2>/dev/null || head -n 1 "$localfile")
-  echo "Looking for sample from $localfile: '$sample'"
+for ((i=0; i<$NUM_PAIRS; i++)); do
+  vm_num_idx=$((i*2))
+  business_num_idx=$((i*2 + 1))
+  
+  vm_num=${PAIRS[$vm_num_idx]}
+  business_num=${PAIRS[$business_num_idx]}
+  
+  business_file="$SCRIPT_DIR/../business/business_${business_num}.txt"
+  sample=$(head -n 1 "$business_file")
+  echo "Looking for sample from business_${business_num}.txt: '$sample'"
   grep -nF "$sample" "$OUT_A" || true
 done
 

@@ -1,21 +1,57 @@
 #!/usr/bin/env bash
 # Test 4: Read-my-writes + client-append ordering
-# Usage: ./test4_append_ordering.sh CLIENT_VM HYDFSFILE LOCAL1 LOCAL2
-# Example: ./test4_append_ordering.sh vm1 demo_foo.txt local/foo1.txt local/foo2.txt
+# Usage: ./test4_append_ordering.sh VM_NUM HYDFSFILE BUSINESS_NUM1 BUSINESS_NUM2
+# Example: ./test4_append_ordering.sh 1 demo_foo.txt 5 10
 
 set -euo pipefail
 
-CLIENT_VM=${1:-localhost}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOSTS_FILE="$SCRIPT_DIR/../hosts.txt"
+
+VM_NUM=${1:-}
 HYDFSFILE=${2:-}
-LOCAL1=${3:-}
-LOCAL2=${4:-}
-FILE_NAME="RandomFile1"
+BUSINESS_NUM1=${3:-}
+BUSINESS_NUM2=${4:-}
 CLIENT="./client"
 TMP_OUT="/tmp/hy_get_after_appends"
 
-if [[ -z "$HYDFSFILE" || -z "$LOCAL1" || -z "$LOCAL2" ]]; then
-  echo "Usage: $0 CLIENT_VM HYDFSFILE LOCAL1 LOCAL2"
+if [[ -z "$VM_NUM" || -z "$HYDFSFILE" || -z "$BUSINESS_NUM1" || -z "$BUSINESS_NUM2" ]]; then
+  echo "Usage: $0 VM_NUM HYDFSFILE BUSINESS_NUM1 BUSINESS_NUM2"
+  echo "Example: $0 1 demo_foo.txt 5 10"
+  echo "  VM_NUM: VM number (1-10)"
+  echo "  HYDFSFILE: HyDFS filename to create/append to"
+  echo "  BUSINESS_NUM1: First business file number (e.g., 5 for business_5.txt)"
+  echo "  BUSINESS_NUM2: Second business file number (e.g., 10 for business_10.txt)"
   exit 2
+fi
+
+# Read hosts from hosts.txt
+if [[ ! -f "$HOSTS_FILE" ]]; then
+  echo "Error: $HOSTS_FILE not found"
+  exit 1
+fi
+
+mapfile -t HOSTS < "$HOSTS_FILE"
+
+# Validate VM number
+if [[ "$VM_NUM" -lt 1 || "$VM_NUM" -gt "${#HOSTS[@]}" ]]; then
+  echo "Error: VM_NUM must be between 1 and ${#HOSTS[@]}"
+  exit 1
+fi
+
+CLIENT_VM="${HOSTS[$((VM_NUM - 1))]}"
+LOCAL1="../business/business_${BUSINESS_NUM1}.txt"
+LOCAL2="../business/business_${BUSINESS_NUM2}.txt"
+
+# Validate business files exist
+if [[ ! -f "$SCRIPT_DIR/$LOCAL1" ]]; then
+  echo "Error: Business file not found: $SCRIPT_DIR/$LOCAL1"
+  exit 1
+fi
+
+if [[ ! -f "$SCRIPT_DIR/$LOCAL2" ]]; then
+  echo "Error: Business file not found: $SCRIPT_DIR/$LOCAL2"
+  exit 1
 fi
 
 # Helper to run client command on client VM
