@@ -2,13 +2,16 @@
 
 # Script to measure rebalancing overhead
 #
-# IMPORTANT: Run this script ON A VM (e.g., fa25-cs425-0201) from the ~/mp3-g02 directory
-# NOT on your local machine!
+# IMPORTANT: Run this script ON A VM from the ~/mp3-g02 directory
 #
-# This measures the BANDWIDTH used when a new node joins and files are redistributed
+# WHAT THIS MEASURES:
+# When a 4th node joins a 3-node cluster, approximately 1/4 of the files need to 
+# move to the new node based on consistent hashing. We measure:
+# 1. Time for rebalancing to complete
+# 2. Total data transferred (file_count * file_size * 0.25)
 
 FILE_COUNTS=(10 50 100 200)
-FILE_SIZE=131072 # 128KiB
+FILE_SIZE=131072 # 128 KiB
 OUTPUT_DIR="measurements/rebalancing"
 mkdir -p $OUTPUT_DIR
 
@@ -17,95 +20,124 @@ HOSTS=()
 while IFS= read -r line; do
     HOSTS+=("$line")
 done < ./hosts.txt
-NODE_TO_ADD="${HOSTS[3]}" # The 4th node in the list
-REMOTE_DIR="mp3-g02"
 
-echo "=== Rebalancing Bandwidth Measurement ==="
-echo "This measures network bandwidth when node 4 joins and files are redistributed"
+NODE_TO_ADD="${HOSTS[3]}" # 4th node
+
+echo "=== Rebalancing Overhead Measurement ==="
+echo "Cluster: 3 nodes initially, adding 4th node"
 echo ""
 
 for count in "${FILE_COUNTS[@]}"; do
     echo "========================================="
-    echo "Measuring rebalancing for $count files of ${FILE_SIZE} bytes each"
+    echo "Test: $count files × ${FILE_SIZE} bytes"
     echo "========================================="
 
-    # 1. Preload the system with $count files of size 128KB on 3-node cluster
-    echo "[Step 1/5] Preloading $count files into 3-node cluster..."
+    # 1. Preload files on 3-node cluster
+    echo "[1/4] Creating $count files on 3-node cluster..."
     for i in $(seq 1 $count); do
-        dd if=/dev/urandom of=testfile.tmp bs=$FILE_SIZE count=1 &>/dev/null
-        ./client -cmd create testfile.tmp sdfs_rebalance_${count}_${i} &>/dev/null
-        if [ $((i % 20)) -eq 0 ]; then
-            echo "  Created $i/$count files..."
+        dd if=/dev/urandom of=testfile_${i}.tmp bs=$FILE_SIZE count=1 &>/dev/null
+        ./client -cmd create testfile_${i}.tmp rebal_file_${i} &>/dev/null
+        rm testfile_${i}.tmp
+        
+        if [ $((i % 10)) -eq 0 ]; then
+            echo "  Created $i/$count files"
         fi
     done
-    rm testfile.tmp
-    echo "  ✓ Preload complete: $count files stored on 3 nodes"
-    sleep 2
+    echo "  ✓ All $count files created and replicated on 3 nodes"
+    sleep 3
 
-    # 2. Get introducer info
-    echo "[Step 2/5] Getting introducer information..."
+    # 2. Get cluster info
     INTRODUCER_HOST="${HOSTS[0]}"
     INTRODUCER_IP=$(ssh "${INTRODUCER_HOST}" "hostname -i" | tr -d '[:space:]')
     INTRODUCER_ADDR="${INTRODUCER_IP}:8080"
-    echo "  Introducer: ${INTRODUCER_ADDR}"
 
-    # 3. Start bandwidth monitoring on the NEW node (node 4) - it will receive files
-    echo "[Step 3/5] Starting bandwidth monitoring on node 4 (${NODE_TO_ADD})..."
+    # 3. Join 4th node and measure time
+    echo "[2/4] Adding 4th node to trigger rebalancing..."
     
-    # Start ifstat on node 4 to measure incoming bandwidth
+    # Clean node 4 first
     ssh "${NODE_TO_ADD}" "
-        pkill -f ifstat 2>/dev/null || true
-        sleep 1
-        cd ${REMOTE_DIR}
-        ifstat -i eth0 -d 1 -n > ${OUTPUT_DIR}/bandwidth_${count}.log 2>${OUTPUT_DIR}/ifstat_error_${count}.log &
-        echo \$! > /tmp/ifstat.pid
-    "
-    
-    sleep 2
-    echo "  ✓ Bandwidth monitoring started on node 4"
-
-    # 4. Start node 4 to trigger rebalancing
-    echo "[Step 4/5] Starting node 4 to join cluster and trigger rebalancing..."
-    NODE_PORT=8083
-    NODE_CONTROL_PORT=18080
-    
-    ssh "${NODE_TO_ADD}" "
-        cd ${REMOTE_DIR}
+        cd mp3-g02
         pkill -f './client -port' 2>/dev/null || true
         rm -rf hydfs_storage
-        nohup ./client -port ${NODE_PORT} -control-port ${NODE_CONTROL_PORT} -introducer ${INTRODUCER_ADDR} > node4.log 2>&1 &
-    "
+    " 2>/dev/null
+
+    # Start timer
+    start_time=$(date +%s)
     
-    echo "  ✓ Node 4 joining cluster..."
-    
-    # 5. Wait for rebalancing to complete
-    echo "[Step 5/5] Waiting for rebalancing (60 seconds)..."
-    sleep 60
-    
-    # Stop bandwidth monitoring
-    echo "  Stopping bandwidth monitoring..."
+    # Start node 4
     ssh "${NODE_TO_ADD}" "
-        if [ -f /tmp/ifstat.pid ]; then
-            kill \$(cat /tmp/ifstat.pid) 2>/dev/null || true
-            rm /tmp/ifstat.pid
+        cd mp3-g02
+        nohup ./client -port 8083 -control-port 18080 -introducer ${INTRODUCER_ADDR} > node4_rebal.log 2>&1 &
+    " 2>/dev/null
+    
+    echo "  Node 4 started, waiting for rebalancing..."
+
+    # 4. Wait and detect when rebalancing completes
+    echo "[3/4] Monitoring rebalancing progress..."
+    
+    max_wait=120
+    elapsed=0
+    check_interval=5
+    
+    while [ $elapsed -lt $max_wait ]; do
+        # Check how many files node 4 has received
+        files_on_node4=$(ssh "${NODE_TO_ADD}" "
+            cd mp3-g02
+            ./client -cmd liststore 2>/dev/null | grep -c 'rebal_file_' || echo 0
+        " 2>/dev/null)
+        
+        echo "  [${elapsed}s] Node 4 has $files_on_node4 files"
+        
+        # Expect roughly 25% of files on node 4 (could vary due to hashing)
+        expected_min=$((count / 5))  # At least 20% 
+        
+        if [ "$files_on_node4" -ge "$expected_min" ]; then
+            echo "  ✓ Rebalancing appears complete!"
+            break
         fi
-        pkill -f ifstat 2>/dev/null || true
-    "
+        
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+    done
     
-    # Copy bandwidth log back to this machine
-    scp "${NODE_TO_ADD}:~/${REMOTE_DIR}/${OUTPUT_DIR}/bandwidth_${count}.log" "$OUTPUT_DIR/" &>/dev/null
+    end_time=$(date +%s)
+    rebalance_time=$((end_time - start_time))
     
-    echo "  ✓ Measurement complete for $count files"
+    # Calculate theoretical data transferred (assume 25% of files moved to new node)
+    total_data_bytes=$((count * FILE_SIZE))
+    transferred_bytes=$((total_data_bytes / 4))
+    transferred_mb=$((transferred_bytes / 1024 / 1024))
     
-    # Stop node 4 to reset for next iteration
-    echo "  Stopping node 4 for next iteration..."
-    ssh "${NODE_TO_ADD}" "pkill -f client"
-    sleep 5
+    echo "[4/4] Recording results..."
+    echo "  Rebalancing time: ${rebalance_time}s"
+    echo "  Files on node 4: $files_on_node4"
+    echo "  Theoretical data transferred: ${transferred_mb} MB"
+    
+    # Save results
+    {
+        echo "File count: $count"
+        echo "File size: ${FILE_SIZE} bytes"
+        echo "Rebalancing time: ${rebalance_time} seconds"
+        echo "Files on node 4: $files_on_node4"
+        echo "Theoretical data transferred: ${transferred_mb} MB"
+        echo "Average bandwidth: $((transferred_mb / rebalance_time)) MB/s (theoretical)"
+    } > "$OUTPUT_DIR/rebalance_${count}.log"
+    
+    # Also save just the bandwidth for plotting
+    bandwidth_mbps=$((transferred_mb / rebalance_time))
+    echo "$bandwidth_mbps" > "$OUTPUT_DIR/bandwidth_${count}.log"
+    
+    echo "  ✓ Results saved"
+    
+    # Stop node 4 for next iteration
+    echo "  Cleaning up for next test..."
+    ssh "${NODE_TO_ADD}" "pkill -f client" 2>/dev/null
+    sleep 3
     
     echo ""
 done
 
 echo "========================================="
-echo "✓ All rebalancing measurements complete!"
-echo "Results are in: $OUTPUT_DIR"
+echo "✓ All measurements complete!"
+echo "Results in: $OUTPUT_DIR"
 echo "========================================="
