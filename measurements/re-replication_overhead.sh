@@ -65,6 +65,7 @@ for size in "${FILE_SIZES[@]}"; do
         ls_output=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; ./client -cmd ls ${test_file}" 2>/dev/null)
         
         # Count the number of node addresses in the output (lines with :8080)
+        echo "$ls_output"
         replica_count=$(echo "$ls_output" | grep -c ":808" 2>/dev/null || echo "0")
         
         # If we see 3 replicas for our test file, re-replication is likely complete
