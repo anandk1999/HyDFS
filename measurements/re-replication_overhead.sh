@@ -46,11 +46,32 @@ for size in "${FILE_SIZES[@]}"; do
 
     start_time=$(date +%s%N)
 
-    # Wait for re-replication to complete. 
-    # This is tricky. We'll wait for a fixed time for now.
-    # A better approach would be to check logs for completion.
+    # Wait for re-replication to complete by checking if files are properly replicated
+    # We'll check the ls output to verify all 100 files are back to 3 replicas
     echo "Waiting for re-replication to complete..."
-    sleep 60 # Adjust this based on expected re-replication time
+    
+    MAX_WAIT=120  # Maximum wait time in seconds
+    CHECK_INTERVAL=2  # Check every 2 seconds
+    elapsed=0
+    
+    while [ $elapsed -lt $MAX_WAIT ]; do
+        # Check if re-replication is complete by listing files and checking replica counts
+        # This assumes your HyDFS ls command shows replica counts
+        replica_check=$(ssh "${HOSTS[0]}" "cd ${REMOTE_DIR}; echo 'ls' | ./client -control-port 18080 -cmd" 2>/dev/null | grep -c "3 replicas" || echo "0")
+        
+        # If we have 100 files with 3 replicas each, re-replication is complete
+        if [ "$replica_check" -ge 100 ]; then
+            echo "Re-replication complete! All files restored to 3 replicas."
+            break
+        fi
+        
+        sleep $CHECK_INTERVAL
+        elapsed=$((elapsed + CHECK_INTERVAL))
+    done
+    
+    if [ $elapsed -ge $MAX_WAIT ]; then
+        echo "Warning: Re-replication timeout after ${MAX_WAIT}s"
+    fi
 
     end_time=$(date +%s%N)
     
