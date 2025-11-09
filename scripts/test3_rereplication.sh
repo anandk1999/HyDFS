@@ -37,7 +37,7 @@ done < "$HOSTS_FILE"
 stop_node() {
   local vm="$1"
   echo "Stopping HyDFS process on $vm"
-  ssh "$vm" "pkill -f mp3-g02 || true; pkill -f main || true; pkill -f client || true"
+  ssh "$vm" "pkill -f mp3-g02 || true; pkill -f main || true; pkill -f client || true" || true
 }
 
 # Step 1: Kill the given VMs (convert VM numbers to hostnames)
@@ -50,7 +50,7 @@ for vm_num in "${KILL_VM_NUMS[@]}"; do
   # Bash arrays are 0-indexed, so subtract 1
   vm_host="${HOSTS[$((vm_num - 1))]}"
   echo "VM $vm_num -> $vm_host"
-  stop_node "$vm_host"
+  stop_node "$vm_host" || true
 done
 
 echo "Killed ${#KILL_VM_NUMS[@]} VM(s). Waiting $WAIT_AFTER_KILL seconds for the cluster to stabilize and re-replicate..."
