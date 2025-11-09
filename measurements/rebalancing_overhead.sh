@@ -6,13 +6,6 @@
 # NOT on your local machine!
 #
 
-# Check if running on a VM (not local machine)
-if [[ $(hostname) != *"cs425"* ]]; then
-    echo "ERROR: This script must be run ON A VM (e.g., fa25-cs425-0201), not locally!"
-    echo "Please SSH to a VM and run from ~/mp3-g02 directory."
-    exit 1
-fi
-
 FILE_COUNTS=(10 50 100 200)
 FILE_SIZE=131072 # 128KiB
 OUTPUT_DIR="measurements/rebalancing"
@@ -50,19 +43,8 @@ for count in "${FILE_COUNTS[@]}"; do
     pkill -f ifstat 2>/dev/null || true
     sleep 1
     
-    # Start ifstat and capture errors
-    echo "Starting ifstat to measure bandwidth..."
-    ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${count}.log 2>$OUTPUT_DIR/ifstat_error_${count}.log &
+    ifstat -d 1 -n > $OUTPUT_DIR/bandwidth_${count}.log &
     ifstat_pid=$!
-    
-    # Verify ifstat is running
-    sleep 2
-    if ! ps -p $ifstat_pid > /dev/null 2>&1; then
-        echo "WARNING: ifstat failed to start! Check $OUTPUT_DIR/ifstat_error_${count}.log"
-        cat $OUTPUT_DIR/ifstat_error_${count}.log
-    else
-        echo "ifstat running with PID $ifstat_pid"
-    fi
 
     # Wait for rebalancing to complete.
     # This is tricky. We'll wait for a fixed time.

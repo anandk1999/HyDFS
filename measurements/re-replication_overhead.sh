@@ -6,13 +6,6 @@
 # NOT on your local machine!
 #
 
-# Check if running on a VM (not local machine)
-if [[ $(hostname) != *"cs425"* ]]; then
-    echo "ERROR: This script must be run ON A VM (e.g., fa25-cs425-0201), not locally!"
-    echo "Please SSH to a VM and run from ~/mp3-g02 directory."
-    exit 1
-fi
-
 # File sizes in bytes (1KB, 10KB, 100KB, 512KB, 1MB)
 FILE_SIZES=(1024 10240 102400 524288 1048576)
 NUM_FILES=100
