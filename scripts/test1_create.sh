@@ -17,10 +17,7 @@ SLEEP_AFTER_CREATE=3
 run_on() {
   local host="$1"; shift
   if [[ "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
-    for arg in $@; do
-      echo $arg
-    done
-    (cd "/home/saik2/mp3-g02" && "$@")
+    (cd "/home/saik2/mp3-g02" && echo ls && "$@")
   else
     ssh "$host" "cd /home/saik2/mp3-g02 && $*"
   fi
