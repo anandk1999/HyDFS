@@ -58,7 +58,7 @@ We subjected HyDFS to rigorous stress testing to evaluate its behavior under loa
 ### 1. Rebalancing Overhead (Scale-Out)
 When a new node joins, the system must transfer a subset of files to it to balance the load.
 
-![Rebalancing Overhead](measurements/rebalancing/rebalancing_overhead.png)
+![Rebalancing Overhead](./readme/rebalancing_overhead.png)
 
 *   **Trend**: Rebalancing time grows linearly with the number of files, while network bandwidth consumption plateaus at ~4 Mbps due to our sophisticated throttling mechanism.
 *   **Design Choice**: We prioritized **safety over speed**. A 200ms throttle between file transfers prevents the rebalancing process from saturating the network and impacting foreground client traffic.
@@ -66,7 +66,7 @@ When a new node joins, the system must transfer a subset of files to it to balan
 ### 2. Merge Performance (Write Latency)
 We measured the latency of merging concurrent appends from multiple clients.
 
-![Merge Performance](measurements/merge/merge_performance.png)
+![Merge Performance](./readme/merge_performance.png)
 
 *   **Result**: The system demonstrates stable latency characteristics even as file size increases, validating the efficiency of our append-only storage engine.
 
